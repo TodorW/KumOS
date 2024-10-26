@@ -11,10 +11,35 @@
 // Global variable to track kernel statistics
 static KernelStats kernel_stats = {0};
 
+// Kernel version information structure
+typedef struct {
+    const char *version;
+    const char *release_date;
+    const char *author;
+} KernelVersionInfo;
+
+// Define the kernel version information
+static KernelVersionInfo kernel_version_info = {
+    .version = "1.0.0",
+    .release_date = "2023-10-01",
+    .author = "Your Name"
+};
+
 // Function to log kernel events
 void log_event(const char *event) {
     // Log the event (this could be to a console, file, etc.)
     log_to_console(event);
+}
+
+// Function to log kernel version information
+void log_kernel_version() {
+    char version_message[256];
+    snprintf(version_message, sizeof(version_message),
+             "Kernel Version: %s, Release Date: %s, Author: %s",
+             kernel_version_info.version,
+             kernel_version_info.release_date,
+             kernel_version_info.author);
+    log_event(version_message);
 }
 
 // Function to handle kernel errors
@@ -48,6 +73,9 @@ void graceful_shutdown() {
 }
 
 void kernel_main() {
+    // Log the kernel version information
+    log_kernel_version();
+
     // Initialize memory management
     memory_init();
     log_event("Memory management initialized.");
