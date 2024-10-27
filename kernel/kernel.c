@@ -7,6 +7,7 @@
 #include "utils/logging.h"        // New logging header
 #include "utils/error_handling.h" // New error handling header
 #include "utils/statistics.h"     // New statistics header
+#include <string.h>               // For string manipulation
 
 // Global variable to track kernel statistics
 static KernelStats kernel_stats = {0};
@@ -23,6 +24,20 @@ static KernelVersionInfo kernel_version_info = {
     .version = "1.0.0",
     .release_date = "2023-10-01",
     .author = "Your Name"
+};
+
+// Kernel configuration structure
+typedef struct {
+    int max_processes;
+    int memory_limit; // in MB
+    int scheduler_type; // 0 for round-robin, 1 for priority-based, etc.
+} KernelConfig;
+
+// Default kernel configuration
+static KernelConfig kernel_config = {
+    .max_processes = 128,
+    .memory_limit = 512,
+    .scheduler_type = 0
 };
 
 // Function to log kernel events
@@ -72,9 +87,34 @@ void graceful_shutdown() {
     }
 }
 
+// Function to load kernel configuration
+void load_kernel_config(const char *config_file) {
+    // For simplicity, we'll just use hardcoded values instead of file reading
+    // In a real implementation, you would read from a file and parse it
+    log_event("Loading kernel configuration...");
+    
+    // Example of setting configuration
+    kernel_config.max_processes = 256; // Example modification
+    kernel_config.memory_limit = 1024;  // Example modification
+    kernel_config.scheduler_type = 1;    // Example modification
+
+    // Log the configuration changes
+    char config_message[256];
+    snprintf(config_message, sizeof(config_message),
+             "Kernel Config - Max Processes: %d, Memory Limit: %d MB, Scheduler Type: %d",
+             kernel_config.max_processes,
+             kernel_config.memory_limit,
+             kernel_config.scheduler_type);
+    log_event(config_message);
+}
+
+// Main kernel function
 void kernel_main() {
     // Log the kernel version information
     log_kernel_version();
+
+    // Load kernel configuration
+    load_kernel_config("kernel_config.txt"); // Example config file
 
     // Initialize memory management
     memory_init();
