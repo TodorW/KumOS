@@ -237,3 +237,7 @@ ZephyrOS is licensed under the MIT License. See the [LICENSE](LICENSE) file for 
 ---
 
 Thank you for your interest in ZephyrOS! Feel free to open issues or discussions for any questions or suggestions.
+
+---
+
+*Rights and ownership of these software are exclusevily related to TodorW, not other contributors of it.
