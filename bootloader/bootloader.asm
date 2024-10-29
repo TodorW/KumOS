@@ -1,11 +1,12 @@
 ; bootloader.asm
-; A simple bootloader for loading a ZephyrOS kernel with verbose boot messages
+; A simple bootloader for loading a ZephyrOS kernel with verbose boot messages and custom boot animations
 
 [org 0x7C00]        ; BIOS loads the bootloader at memory address 0x7C00
 
 ; Define some constants
 KERNEL_SECTOR = 2  ; The sector where the kernel is located
 SECTOR_SIZE = 512   ; Size of a sector in bytes
+ANIMATION_DELAY = 0x3FFFF ; Delay for animation (tweak as needed)
 
 ; Bootloader entry point
 start:
@@ -18,9 +19,9 @@ start:
     mov si, boot_msg
     call print_string
 
-    ; Load the kernel from disk
+    ; Start loading the kernel with animation
     mov bx, 0x1000        ; Load kernel at 0x1000
-    call load_kernel
+    call load_kernel_with_animation
 
     ; Print success message
     mov si, success_msg
@@ -29,8 +30,13 @@ start:
     ; Jump to the kernel entry point
     jmp 0x1000            ; Jump to the kernel
 
-; Function to load the kernel from disk
-load_kernel:
+; Function to load the kernel from disk with animation
+load_kernel_with_animation:
+    ; Start the animation
+    mov cx, 0             ; Animation frame counter
+    call start_animation
+
+    ; Load the kernel from disk
     mov ah, 0x02         ; BIOS function to read sectors
     mov al, 1            ; Read 1 sector
     mov ch, 0            ; Cylinder 0
@@ -40,16 +46,46 @@ load_kernel:
     mov dl, [boot_drive] ; Read from the boot drive
     int 0x13             ; Call BIOS interrupt
 
+    ; Stop the animation
+    call stop_animation
+
     ; Check for errors
     jc load_error         ; Jump if carry flag is set (error)
 
     ret
 
-load_error:
-    ; Print an error message (a simple loop)
-    mov si, error_msg
+start_animation:
+    ; Print loading animation
+    mov si, animation_frames
+.animation_loop:
+    ; Print the current animation frame
     call print_string
-    hlt                   ; Halt the CPU
+    ; Delay for a moment
+    call delay
+    ; Update frame counter
+    inc cx
+    cmp cx, 4             ; We have 4 frames (0 to 3)
+    jl .animation_loop
+
+    ; Reset frame counter
+    xor cx, cx
+    jmp .animation_loop   ; Loop forever (until loading is done)
+
+stop_animation:
+    ; Clear the line after animation
+    mov ah, 0x0E
+    mov al, 0x0D         ; Carriage return
+    int 0x10
+    mov al, 0x0C         ; Clear line
+    int 0x10
+    ret
+
+; Function to delay (simple loop)
+delay:
+    mov cx, ANIMATION_DELAY
+.delay_loop:
+    loop .delay_loop
+    ret
 
 ; Function to print a string
 print_string:
@@ -67,6 +103,12 @@ print_string:
 boot_msg db 'Booting ZephyrOS...', 0
 success_msg db 'Kernel loaded successfully!', 0
 error_msg db 'Error loading kernel!', 0
+
+; Animation frames
+animation_frames db '.  ', 0 ; Frame 0
+animation_frames db '.. ', 0  ; Frame 1
+animation_frames db '...', 0   ; Frame 2
+animation_frames db '  ', 0     ; Frame 3 (clear line)
 
 ; Boot drive (assumed to be 0x80 for the first hard disk)
 boot_drive db 0x80
