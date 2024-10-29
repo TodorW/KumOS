@@ -1,5 +1,5 @@
 ; bootloader.asm
-; A simple bootloader for loading a ZephyrOS kernel
+; A simple bootloader for loading a ZephyrOS kernel with verbose boot messages
 
 [org 0x7C00]        ; BIOS loads the bootloader at memory address 0x7C00
 
@@ -14,9 +14,17 @@ start:
     mov ss, ax
     mov sp, 0x7C00
 
+    ; Print boot message
+    mov si, boot_msg
+    call print_string
+
     ; Load the kernel from disk
     mov bx, 0x1000        ; Load kernel at 0x1000
     call load_kernel
+
+    ; Print success message
+    mov si, success_msg
+    call print_string
 
     ; Jump to the kernel entry point
     jmp 0x1000            ; Jump to the kernel
@@ -55,7 +63,9 @@ print_string:
 .done:
     ret
 
-; Error message
+; Boot messages
+boot_msg db 'Booting ZephyrOS...', 0
+success_msg db 'Kernel loaded successfully!', 0
 error_msg db 'Error loading kernel!', 0
 
 ; Boot drive (assumed to be 0x80 for the first hard disk)
