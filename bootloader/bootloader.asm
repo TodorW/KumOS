@@ -1,6 +1,6 @@
 ; bootloader.asm
 ; A simple bootloader for loading a ZephyrOS kernel with verbose boot messages, custom boot animations,
-; fallback mechanism, and boot time measurement.
+; fallback mechanism, boot time measurement, and memory map display.
 
 [org 0x7C00]        ; BIOS loads the bootloader at memory address 0x7C00
 
@@ -38,6 +38,9 @@ start:
     mov ax, [boot_start_time]   ; Load the start time
     sub ax, [boot_end_time]     ; Calculate boot time
     call print_boot_time
+
+    ; Display memory map
+    call display_memory_map
 
     ; Jump to the kernel entry point
     jmp 0x1000                  ; Jump to the kernel
@@ -161,12 +164,47 @@ print_boot_time:
     call print_string
     ret
 
+; Function to display the memory map
+display_memory_map:
+    ; Get the memory map from the BIOS
+    mov ax, 0xE820            ; BIOS function to get memory map
+    xor ebx, ebx              ; Start at the beginning of the memory map
+    xor ecx, ecx              ; Set ECX to 0 (required by BIOS)
+.next_entry:
+    int 0x15                    ; Call BIOS interrupt
+    jc .done                    ; If carry flag is set, we're done
+    ; Print the memory map entry
+    mov si, memory_map_entry_msg
+    call print_string
+    mov ax, bx                ; Print the base address
+    call print_hex
+    mov ax, cx                ; Print the length
+    call print_hex
+    mov al, dl                ; Print the type
+    call print_hex
+    ; Move to the next entry
+    add ebx, 20               ; Each entry is 20 bytes
+    jmp .next_entry
+.done:
+    ret
+
+; Function to print a hexadecimal value
+print_hex:
+    ; Convert AX to a hexadecimal string and print it
+    ; This is a placeholder; actual implementation may vary
+    ; For demonstration, we will just print a static message
+    mov si, hex_msg
+    call print_string
+    ret
+
 ; Boot messages
 boot_msg db 'Booting ZephyrOS...', 0
 success_msg db 'Kernel loaded successfully!', 0
 error_msg db 'Error loading kernel!', 0
 secondary_kernel_msg db 'Loading secondary kernel...', 0
 boot_time_msg db 'Boot time: ', 0
+memory_map_entry_msg db 'Memory map entry: Base=0x', 0
+hex_msg db ' (hex)', 0
 
 ; Animation frames
 animation_frames db '.  ', 0 ; Frame 0
