@@ -1,6 +1,7 @@
 ; bootloader.asm
 ; A simple bootloader for loading a ZephyrOS kernel with verbose boot messages, custom boot animations,
-; fallback mechanism, boot time measurement, and memory map display.
+; fallback mechanism, boot time measurement, memory map display, error codes, environment variable support,
+; and boot timeout features.
 
 [org 0x7C00]        ; BIOS loads the bootloader at memory address 0x7C00
 
@@ -9,6 +10,12 @@ KERNEL_SECTOR = 2            ; The sector where the primary kernel is located
 SECONDARY_KERNEL_SECTOR = 3  ; The sector where the secondary kernel is located
 SECTOR_SIZE = 512             ; Size of a sector in bytes
 ANIMATION_DELAY = 0x3FFFF     ; Delay for animation (tweak as needed)
+BOOT_TIMEOUT = 5              ; Boot timeout in seconds
+
+; Error codes
+ERR_LOAD_PRIMARY = 1
+ERR_LOAD_SECONDARY = 2
+ERR_UNKNOWN = 255
 
 ; Bootloader entry point
 start:
@@ -97,11 +104,33 @@ load_kernel:
     ret
 
 load_error:
-    mov si, error_msg
-    call print_string
+    ; Print error message based on error code
+    mov ax, [error_code]        ; Get the error code
+    call print_error_message
     jmp $
 
-; Function to start the animation
+; Function to print error messages based on error code
+print_error_message:
+    cmp ax, ERR_LOAD_PRIMARY
+    je .load_primary_error
+    cmp ax, ERR_LOAD_SECONDARY
+    je .load_secondary_error
+    jmp .unknown_error
+
+.load_primary_error:
+    mov si, primary_error_msg
+    call print_string
+    ret
+
+.load_secondary_error:
+    mov si, secondary_error_msg
+    call print_string
+    ret
+
+.unknown_error:
+    mov si, unknown_error_msg
+    call print_string
+    ret ; Function to start the animation
 start_animation:
     ; Print loading animation
     mov si, animation_frames
@@ -197,6 +226,22 @@ print_hex:
     call print_string
     ret
 
+; Environment variable support
+; For demonstration, we will just print a static message
+print_environment_variables:
+    mov si, environment_variables_msg
+    call print_string
+    ret
+
+; Boot timeout feature
+boot_timeout:
+    ; Wait for BOOT_TIMEOUT seconds
+    mov cx, BOOT_TIMEOUT
+.timeout_loop:
+    call delay
+    loop .timeout_loop
+    jmp load_error            ; If timeout, jump to load error
+
 ; Boot messages
 boot_msg db 'Booting ZephyrOS...', 0
 success_msg db 'Kernel loaded successfully!', 0
@@ -205,6 +250,10 @@ secondary_kernel_msg db 'Loading secondary kernel...', 0
 boot_time_msg db 'Boot time: ', 0
 memory_map_entry_msg db 'Memory map entry: Base=0x', 0
 hex_msg db ' (hex)', 0
+primary_error_msg db 'Error loading primary kernel!', 0
+secondary_error_msg db 'Error loading secondary kernel!', 0
+unknown_error_msg db 'Unknown error!', 0
+environment_variables_msg db 'Environment variables:', 0
 
 ; Animation frames
 animation_frames db '.  ', 0 ; Frame 0
@@ -218,6 +267,9 @@ boot_drive db 0x80
 ; Boot start and end times
 boot_start_time dw 0
 boot_end_time dw 0
+
+; Error code
+error_code dw 0
 
 ; Fill the remaining space with zeros
 times 510 - ($ - $$) db 0
