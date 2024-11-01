@@ -1,12 +1,12 @@
 
 ---
 
-# ZephyrOS
+# KumOS
 
-**ZephyrOS** is a lightweight, modular operating system designed and implemented in C. Its focus is on simplicity, efficiency, and scalability. ZephyrOS is built from the ground up, aiming to provide a minimal but flexible foundation for operating system design, kernel development, and system-level programming. It supports basic multitasking, memory management, process scheduling, and file system operations, all of which are essential for modern operating systems.
+**KumOS** is a lightweight, modular operating system designed and implemented in C. Its focus is on simplicity, efficiency, and scalability. KumOS is built from the ground up, aiming to provide a minimal but flexible foundation for operating system design, kernel development, and system-level programming. It supports basic multitasking, memory management, process scheduling, and file system operations, all of which are essential for modern operating systems.
 
 <div align="center">
-  <img src="ZephyrOS.png" alt="ZephyrOS Logo" width="300"/>
+  <img src="KumOS.png" alt="KumOS Logo" width="300"/>
 </div>
 
 ---
@@ -26,19 +26,19 @@
 
 ## Project Overview
 
-ZephyrOS is intended for developers interested in learning or contributing to low-level system software. It is currently a work in progress, with core components like the kernel and shell being developed alongside memory management, process handling, and interrupt systems.
+KumOS is intended for developers interested in learning or contributing to low-level system software. It is currently a work in progress, with core components like the kernel and shell being developed alongside memory management, process handling, and interrupt systems.
 
-The aim of ZephyrOS is to serve as both an educational project and a foundation for future expansion. It offers a platform where developers can experiment with various kernel features, file systems, and even drivers, while keeping the system modular and lightweight.
+The aim of KumOS is to serve as both an educational project and a foundation for future expansion. It offers a platform where developers can experiment with various kernel features, file systems, and even drivers, while keeping the system modular and lightweight.
 
-### Why "Zephyr"?
-The name **Zephyr** reflects the project's philosophy: **lightweight, fast, and efficient**, akin to a gentle breeze. This OS is designed to be minimal yet powerful, much like the wind that’s swift but subtle.
+### Why "Kum"?
+The name **Kum** reflects the project's philosophy: **lightweight, fast, and efficient**, akin to a gentle breeze. This OS is designed to be minimal yet powerful, much like the wind that’s swift but subtle.
 
 ---
 
 ## Features
 
 ### Core Components
-- **Monolithic Kernel**: ZephyrOS uses a monolithic kernel, where core services such as memory management, process scheduling, and hardware I/O are handled in a unified space.
+- **Monolithic Kernel**: KumOS uses a monolithic kernel, where core services such as memory management, process scheduling, and hardware I/O are handled in a unified space.
 - **Basic Shell**: A command-line interface shell for user interaction, supporting essential commands (`ls`, `cd`, `pwd`, etc.).
 - **Memory Management**: Virtual memory management with support for paging and dynamic memory allocation.
 - **Process Management**: Basic process scheduling, multitasking, and context switching.
@@ -55,10 +55,10 @@ The name **Zephyr** reflects the project's philosophy: **lightweight, fast, and 
 
 ## Project Structure
 
-The source code for ZephyrOS is organized as follows:
+The source code for KumOS is organized as follows:
 
 ```
-/ZephyrOS
+/KumOS
 ├── /bootloader                # Bootloader code (e.g., GRUB config, or custom bootloader)
 │   ├── bootloader.asm         # Assembly code for booting the OS
 │   ├── boot.c                 # C code for initializing the boot process
@@ -154,17 +154,17 @@ The source code for ZephyrOS is organized as follows:
 ## Getting Started
 
 ### Prerequisites
-To compile and run ZephyrOS, you will need the following tools:
+To compile and run KumOS, you will need the following tools:
 - **Cross Compiler**: GCC or Clang for cross-compiling to your target architecture (e.g., x86).
 - **QEMU**: An emulator for running and testing the OS.
 - **GRUB**: (Optional) A bootloader for loading your kernel.
 
-### Building ZephyrOS
+### Building KumOS
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/yourusername/ZephyrOS.git
-   cd ZephyrOS
+   git clone https://github.com/yourusername/KumOS.git
+   cd KumOS
    ```
 
 2. **Configure the cross-compiler** (if not already set up):
@@ -179,20 +179,20 @@ To compile and run ZephyrOS, you will need the following tools:
    make
    ```
 
-4. **Run ZephyrOS on QEMU**:
+4. **Run KumOS on QEMU**:
    ```bash
-   qemu-system-i386 -kernel path/to/zephyros-kernel
+   qemu-system-i386 -kernel path/to/Kumos-kernel
    ```
 
-### Running ZephyrOS
-Once the system boots up, you can interact with the **Zephyr Shell**. Enter basic commands like `ls`, `cd`, and `pwd` to explore the system's directory structure, manage files, or start processes.
+### Running KumOS
+Once the system boots up, you can interact with the **Kum Shell**. Enter basic commands like `ls`, `cd`, and `pwd` to explore the system's directory structure, manage files, or start processes.
 
 ---
 
 ## Technical Details
 
 ### Memory Management
-- **Paging**: ZephyrOS implements basic virtual memory management using paging.
+- **Paging**: KumOS implements basic virtual memory management using paging.
 - **Dynamic Memory Allocation**: Memory is allocated dynamically through a `malloc()`-like interface in kernel-space.
 
 ### Process Management
@@ -204,13 +204,13 @@ Once the system boots up, you can interact with the **Zephyr Shell**. Enter basi
 - **Exception Handling**: Basic exception handling for CPU-generated errors like page faults or division by zero.
 
 ### File System
-- **Basic File System**: ZephyrOS comes with a minimal file system implementation that supports reading and writing files, with plans to add support for more advanced file systems like FAT and ext2.
+- **Basic File System**: KumOS comes with a minimal file system implementation that supports reading and writing files, with plans to add support for more advanced file systems like FAT and ext2.
 
 ---
 
 ## Development Tools
 
-To aid development, ZephyrOS leverages the following tools:
+To aid development, KumOS leverages the following tools:
 - **QEMU**: For system emulation and testing without requiring real hardware.
 - **GDB**: For debugging kernel-level code using QEMU’s debugging integration.
 - **Make/CMake**: For automating the build process and compiling the kernel, shell, and userland programs.
@@ -219,7 +219,7 @@ To aid development, ZephyrOS leverages the following tools:
 
 ## How to Contribute
 
-Contributions to ZephyrOS are welcome! Whether you want to add new features, fix bugs, or improve documentation, your input will help this project grow.
+Contributions to KumOS are welcome! Whether you want to add new features, fix bugs, or improve documentation, your input will help this project grow.
 
 To contribute:
 1. Fork the repository.
@@ -232,11 +232,11 @@ Please make sure to follow the project's coding style and submit tests where app
 
 ## License
 
-ZephyrOS is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
+KumOS is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.
 
 ---
 
-Thank you for your interest in ZephyrOS! Feel free to open issues or discussions for any questions or suggestions.
+Thank you for your interest in KumOS! Feel free to open issues or discussions for any questions or suggestions.
 
 ---
 
