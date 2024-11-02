@@ -31,7 +31,7 @@ KumOS is intended for developers interested in learning or contributing to low-l
 The aim of KumOS is to serve as both an educational project and a foundation for future expansion. It offers a platform where developers can experiment with various kernel features, file systems, and even drivers, while keeping the system modular and lightweight.
 
 ### Why "Kum"?
-The name **Kum** reflects the project's philosophy: **lightweight, fast, and efficient**, akin to a gentle breeze. This OS is designed to be minimal yet powerful, much like the wind that’s swift but subtle.
+The name **Kum** reflects the project's philosophy: **reliable, efficient and simple**, akin to a gentle breeze. This OS is designed to be minimal yet powerful, much like the wind that’s swift but subtle.
 
 ---
 
