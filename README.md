@@ -125,7 +125,7 @@ The source code for KumOS is organized as follows:
 │
 ├── /build_system              # Build system for compiling the OS
 │   ├── Makefile               # Main build script for compiling the OS
-│   ├── build.sh               # Shell script to automate the build process
+│   ├── 
 │   └── config.mk              # Configuration settings for the build system
 │
 ├── /cross_compiler_toolchain  # Cross-compiler toolchain setup
