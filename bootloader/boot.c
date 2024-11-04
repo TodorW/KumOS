@@ -1,31 +1,33 @@
-#include <zephyr/kernel.h>       // Kernel API
-#include <zephyr/logging/log.h>   // Logging API
-#include <zephyr/device.h>        // Device API
-#include <zephyr/drivers/gpio.h>  // GPIO API for hardware
-#include <zephyr/sys/printk.h>    // Basic printk support
-#include <zephyr/shell/shell.h>   // Shell API for user prompt
-#include <zephyr/sys/reboot.h>    // Reboot API
-#include <zephyr/version.h>       // Zephyr version API
-#include <zephyr/arch/cpu.h>      // CPU architecture support
+#include <zephyr/kernel.h>
+#include <zephyr/logging/log.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/printk.h>
+#include <zephyr/shell/shell.h>
+#include <zephyr/sys/reboot.h>
+#include <zephyr/version.h>
+#include <zephyr/arch/cpu.h>
+#include <zephyr/drivers/watchdog.h>    // Watchdog API
 
 /* Initialize logger */
 LOG_MODULE_REGISTER(boot, LOG_LEVEL_DBG);
 
 /* Hardware detection constants */
-#define LED0_NODE DT_ALIAS(led0)    // Alias to LED node in device tree
-#define BUTTON_NODE DT_ALIAS(sw0)   // Alias to Button node in device tree
+#define LED0_NODE DT_ALIAS(led0)
+#define BUTTON_NODE DT_ALIAS(sw0)
 
-/* Memory Initialization parameters */
-#define MEMORY_SIZE 1024            // 1 KB for memory buffer
-
-/* Kernel Parameter Parsing */
-static const char *kernel_param = "default_param";  // Default kernel param
+/* Memory and Kernel Parameters */
+#define MEMORY_SIZE 1024
+static const char *kernel_param = "default_param";
 
 /* Memory buffer */
 static uint8_t memory_buffer[MEMORY_SIZE];
 
 /* Debug Mode Flag */
 static bool debug_mode = false;
+
+/* Watchdog Device */
+const struct device *wdt_dev;
 
 /* Function Prototypes */
 void log_initialization(void);
@@ -35,6 +37,9 @@ void init_memory(void);
 void display_kernel_version(void);
 void user_prompt(void);
 void check_architecture(void);
+void setup_watchdog(void);
+void shell_command_list(void);
+void boot_sequence(void);
 
 /* Enhanced Logging */
 void log_initialization(void) {
@@ -44,9 +49,8 @@ void log_initialization(void) {
 
 /* Kernel Parameter Parsing */
 void parse_kernel_parameters(void) {
-    /* Replace this with actual parameter fetching if available */
 #ifdef CONFIG_BOOT_KERNEL_PARAM
-    kernel_param = CONFIG_BOOT_KERNEL_PARAM;  // Example, would be set in Kconfig
+    kernel_param = CONFIG_BOOT_KERNEL_PARAM;
 #endif
     if (kernel_param) {
         LOG_INF("Kernel parameter parsed: %s", kernel_param);
@@ -98,7 +102,32 @@ void check_architecture(void) {
 #endif
 }
 
-/* User Prompt - Utilizing Zephyr Shell */
+/* Watchdog Setup for System Safety */
+void setup_watchdog(void) {
+    wdt_dev = device_get_binding(DT_LABEL(DT_NODELABEL(wdt0)));
+    if (!wdt_dev) {
+        LOG_ERR("Watchdog device not found");
+        return;
+    }
+    struct wdt_timeout_cfg wdt_cfg = {
+        .window = { .min = 0, .max = 1000 },
+        .callback = NULL,
+        .flags = WDT_FLAG_RESET_SOC,
+    };
+    int err = wdt_install_timeout(wdt_dev, &wdt_cfg);
+    if (err != 0) {
+        LOG_ERR("Failed to install watchdog timeout, error: %d", err);
+        return;
+    }
+    err = wdt_setup(wdt_dev, 0);
+    if (err != 0) {
+        LOG_ERR("Failed to setup watchdog, error: %d", err);
+    } else {
+        LOG_INF("Watchdog initialized and started.");
+    }
+}
+
+/* Shell Commands */
 static int cmd_reboot(const struct shell *shell, size_t argc, char **argv) {
     ARG_UNUSED(argc);
     ARG_UNUSED(argv);
@@ -119,12 +148,20 @@ static int cmd_debug(const struct shell *shell, size_t argc, char **argv) {
     return 0;
 }
 
+/* Additional Shell Commands */
+static int cmd_memory_status(const struct shell *shell, size_t argc, char **argv) {
+    ARG_UNUSED(argc);
+    ARG_UNUSED(argv);
+    LOG_INF("Memory buffer status: %s", memory_buffer ? "Initialized" : "Uninitialized");
+    return 0;
+}
+
 SHELL_CMD_REGISTER(reboot, NULL, "Reboot the system", cmd_reboot);
 SHELL_CMD_REGISTER(debug, NULL, "Toggle debug mode", cmd_debug);
+SHELL_CMD_REGISTER(mem_status, NULL, "Check memory buffer status", cmd_memory_status);
 
-/* User prompt setup */
 void user_prompt(void) {
-    LOG_INF("Type 'reboot' to reboot the system, or 'debug' to toggle debug mode.");
+    LOG_INF("Type 'reboot' to reboot the system, 'debug' to toggle debug mode, 'mem_status' for memory buffer status.");
 }
 
 /* Boot Sequence Customization */
@@ -150,17 +187,17 @@ void boot_sequence(void) {
     LOG_INF("Checking system architecture...");
     check_architecture();
 
+    LOG_INF("Setting up watchdog...");
+    setup_watchdog();
+
     LOG_INF("Boot sequence completed.");
     user_prompt();
 }
 
-/* Main boot function */
+/* Main Boot Function */
 void main(void) {
-    /* Set debug mode based on a config flag, if defined */
 #ifdef CONFIG_BOOT_DEBUG_MODE
     debug_mode = true;
 #endif
-
-    /* Begin the customized boot sequence */
     boot_sequence();
 }
