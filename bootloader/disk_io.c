@@ -3,6 +3,7 @@
 #include <string.h>
 #include <errno.h>
 #include <pthread.h>
+#include <time.h>
 
 #include "disk-io.h"
 
@@ -21,12 +22,13 @@ typedef struct {
 typedef struct {
     unsigned int read_count;
     unsigned int write_count;
+    unsigned int error_count;
 } DiskStats;
 
 static FILE *disk_file = NULL;
 static CacheEntry cache[MAX_CACHE_SIZE];
 static int cache_count = 0;
-static DiskStats stats = {0, 0};
+static DiskStats stats = {0, 0, 0};
 
 typedef void (*AsyncCallback)(int result, void *data);
 typedef struct {
@@ -34,11 +36,13 @@ typedef struct {
     void *buffer;
     AsyncCallback callback;
     int is_write;
+    time_t request_time;
 } AsyncRequest;
 
 typedef struct {
     unsigned int start_sector;
     unsigned int end_sector;
+    char label[32];
 } Partition;
 
 static Partition partitions[MAX_PARTITIONS];
@@ -72,6 +76,7 @@ int disk_retry_operation(int (*operation)(unsigned int, void*), unsigned int sec
         if (operation(sector, buffer) == 0) return 0;
         retries++;
     }
+    stats.error_count++;
     return -1;
 }
 
@@ -135,24 +140,30 @@ int disk_write_sector(unsigned int sector, const void *buffer) {
     return 0;
 }
 
-int add_partition(unsigned int start_sector, unsigned int end_sector) {
+int add_partition(unsigned int start_sector, unsigned int end_sector, const char *label) {
     if (partition_count >= MAX_PARTITIONS) {
         fprintf(stderr, "Max partitions reached\n");
         return -1;
     }
     partitions[partition_count].start_sector = start_sector;
     partitions[partition_count].end_sector = end_sector;
+    strncpy(partitions[partition_count].label, label, sizeof(partitions[partition_count].label) - 1);
+    partitions[partition_count].label[sizeof(partitions[partition_count].label) - 1] = '\0';
     partition_count++;
     return 0;
 }
 
 void log_operation(const char *operation, unsigned int sector) {
-    printf("[LOG] %s sector %u\n", operation, sector);
+    time_t current_time = time(NULL);
+    char *timestamp = ctime(&current_time);
+    timestamp[strlen(timestamp) - 1] = '\0'; // Remove newline character
+    printf("[%s] [LOG] %s sector %u\n", timestamp, operation, sector);
 }
 
 void print_stats() {
     printf("Disk Read Count: %u\n", stats.read_count);
     printf("Disk Write Count: %u\n", stats.write_count);
+    printf("Disk Error Count: %u\n", stats.error_count);
 }
 
 void *async_io_thread(void *arg) {
@@ -174,6 +185,7 @@ int async_io(unsigned int sector, void *buffer, int is_write, AsyncCallback call
     req->buffer = buffer;
     req->callback = callback;
     req->is_write = is_write;
+    req->request_time = time(NULL);
     pthread_t thread;
     pthread_create(&thread, NULL, async_io_thread, req);
     pthread_detach(thread);
@@ -194,6 +206,12 @@ int main() {
     char buffer[SECTOR_SIZE] = "Hello, KumOS!";
     async_io(0, buffer, 1, io_callback);
     async_io(0, buffer, 0, io_callback);
+
+    add_partition(0, 1024, "System");
+    add_partition(1024, 2048, "Data");
+
+    log_operation("Read", 0);
+    log_operation("Write", 1024);
 
     print_stats();
     disk_shutdown();
