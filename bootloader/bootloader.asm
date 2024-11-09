@@ -211,7 +211,7 @@ boot_timeout:
     loop .timeout_loop
     jmp load_error
 
-boot_msg db 'Booting ZephyrOS...', 0
+boot_msg db 'Booting KumOS...', 0
 success_msg db 'Kernel loaded successfully!', 0
 error_msg db 'Error loading kernel!', 0
 secondary_kernel_msg db 'Loading secondary kernel...', 0
