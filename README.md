@@ -240,4 +240,4 @@ Thank you for your interest in KumOS! Feel free to open issues or discussions fo
 
 ---
 
-*Rights and ownership of this software are exclusevily related to TodorW, not other contributors of it.
+Rights and ownership of this software are exclusevily related to TodorW, not other contributors of it.
