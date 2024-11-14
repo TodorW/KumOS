@@ -146,7 +146,7 @@ The source code for KumOS is organized as follows:
 │   └── ping.c                # Implementation of the ping utility
 │
 └── /gui                       # Graphical User Interface components
-    # (To be implemented)
+    
 ```
 
 ---
