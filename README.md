@@ -64,7 +64,7 @@ The source code for KumOS is organized as follows:
 │   ├── boot.c                 # C code for initializing the boot process
 │   ├── disk_io.c              # Functions for reading from disk
 │   ├── elf_loader.c           # Code to load the kernel from an ELF file
-│   └── gdt.c                  # Global Descriptor Table setup
+│   └── gdt.c                 
 │
 ├── /kernel                    # Core kernel code (scheduler, memory, system calls, etc.)
 │   ├── kernel.c               # Main kernel entry point
