@@ -239,4 +239,3 @@ KumOS is licensed under the MIT License. See the [LICENSE](LICENSE) file for mor
 Thank you for your interest in KumOS! Feel free to open issues or discussions for any questions or suggestions.
 
 ---
-
