@@ -1,16 +1,17 @@
 [org 0x7C00]
 
-KERNEL_SECTOR = 2
-SECONDARY_KERNEL_SECTOR = 3
-CONFIG_SECTOR = 4
-SECTOR_SIZE = 512
-ANIMATION_DELAY = 0x3FFFF
-BOOT_TIMEOUT = 5
+KERNEL_SECTOR equ 2
+SECONDARY_KERNEL_SECTOR equ 3
+CONFIG_SECTOR equ 4
+SECTOR_SIZE equ 512
+ANIMATION_DELAY equ 5000
+;ANIMATION_DELAY equ 0x3FFFF
+BOOT_TIMEOUT equ 5
 
-ERR_LOAD_PRIMARY = 1
-ERR_LOAD_SECONDARY = 2
-ERR_CHECKSUM_FAILED = 3
-ERR_UNKNOWN = 255
+ERR_LOAD_PRIMARY equ 1
+ERR_LOAD_SECONDARY equ 2
+ERR_CHECKSUM_FAILED equ 3
+ERR_UNKNOWN equ 255
 
 start:
     xor ax, ax
@@ -224,10 +225,16 @@ checksum_error_msg db 'Checksum validation failed!', 0
 unknown_error_msg db 'Unknown error!', 0
 environment_variables_msg db 'Environment variables:', 0
 
-animation_frames db '.  ', 0
-animation_frames db '.. ', 0
-animation_frames db '...', 0
-animation_frames db '  ', 0
+animation_frame_1 db '.  ', 0
+animation_frame_2 db '.. ', 0
+animation_frame_3 db '...', 0
+animation_frame_4 db '   ', 0
+
+animation_frames:
+    dw animation_frame_1
+    dw animation_frame_2
+    dw animation_frame_3
+    dw animation_frame_4
 
 boot_drive db 0x80
 boot_start_time dw 0
@@ -235,5 +242,6 @@ boot_end_time dw 0
 error_code dw 0
 expected_checksum dw 0xABCD
 
-times 510 - ($ - $$) db 0
+times 510 db 0 ; if it works, don't touch it
+;times 510 - ($ - $$) db 0
 dw 0xAA55
