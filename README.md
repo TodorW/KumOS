@@ -176,7 +176,7 @@ To compile and run KumOS, you will need the following tools:
 
 3. **Build the kernel**:
    ```bash
-   make
+   make -f build_system/Makefile
    ```
 
 4. **Run KumOS on QEMU**:
