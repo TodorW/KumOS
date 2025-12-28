@@ -1,1 +1,84 @@
-RECONSTRUCTION IN PROCESS.
+KumOS
+=====
+
+KumOS is a minimalist, Linux-kernel–based operating system written in C.
+It focuses on simplicity, sustainability, and practical usefulness.
+
+The goal is not feature density, but long-term maintainability and clarity.
+Every component must justify its existence.
+
+Mission
+-------
+
+* Minimal surface area
+* Predictable behavior
+* Sustainable design
+* Useful defaults
+* No unnecessary abstractions
+
+Quick Start
+-----------
+
+* Source tree: (TBD)
+* Build system: manual, explicit, no automation magic
+* Status: early development
+
+Principles
+----------
+
+* Simplicity over cleverness
+* Explicit configuration
+* User control over convenience
+* If it can be removed, it should be
+* Correctness comes before stability
+
+Scope
+-----
+
+Included:
+* Linux kernel base
+* Minimal userland
+* Deterministic system behavior
+
+Excluded:
+* Automatic configuration
+* Background daemons without purpose
+* Redundant layers
+* Trend-driven features
+
+Who Is This For?
+================
+
+* Developers who want control
+* System builders
+* Minimalists
+* People who read the code
+
+Kernel Base
+===========
+
+KumOS is based on the Linux kernel.
+
+Upstream behavior is respected where practical.
+Any divergence is intentional and driven by simplicity,
+maintainability, or correctness.
+
+Communication
+=============
+
+* Contact: vuk.todorovic@protonmail.com
+
+License
+=======
+
+KumOS is released under the GNU General Public License v2.
+
+Final Note
+==========
+
+KumOS is not designed to be friendly.
+It is designed to be understandable.
+
+If you value control and clarity, you are in the right place.
+
+Project is still under general reconstruction.
