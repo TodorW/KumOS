@@ -1,7 +1,7 @@
 KumOS
 =====
 
-KumOS is a minimalist, Linux-kernel–based operating system written in C.
+KumOS is a minimalist, (soon-to-be) Linux-kernel–based operating system written in C.
 It focuses on simplicity, sustainability, and practical usefulness.
 
 The goal is not feature density, but long-term maintainability and clarity.
