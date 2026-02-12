@@ -4,8 +4,8 @@
 #define KEYBOARD_STATUS_PORT 0x64
 
 static char keyboard_buffer[256];
-static int buffer_index = 0;
-static int buffer_read = 0;
+static volatile int buffer_index = 0;
+static volatile int buffer_read = 0;
 
 // US QWERTY keyboard layout
 static char keyboard_map[128] = {
@@ -27,11 +27,13 @@ static char keyboard_map_shifted[128] = {
 };
 
 static int shift_pressed = 0;
+static int caps_lock = 0;
 
 void keyboard_init(void) {
     buffer_index = 0;
     buffer_read = 0;
     shift_pressed = 0;
+    caps_lock = 0;
 }
 
 void keyboard_handler(void) {
@@ -40,13 +42,20 @@ void keyboard_handler(void) {
     if (status & 0x01) {
         uint8_t scancode = inb(KEYBOARD_DATA_PORT);
         
-        // Handle shift keys
+        // Handle shift keys (press)
         if (scancode == 0x2A || scancode == 0x36) {
             shift_pressed = 1;
             return;
         }
+        // Handle shift keys (release)
         if (scancode == 0xAA || scancode == 0xB6) {
             shift_pressed = 0;
+            return;
+        }
+        
+        // Handle caps lock
+        if (scancode == 0x3A) {
+            caps_lock = !caps_lock;
             return;
         }
         
@@ -62,6 +71,13 @@ void keyboard_handler(void) {
             c = keyboard_map[scancode];
         }
         
+        // Apply caps lock to letters
+        if (caps_lock && c >= 'a' && c <= 'z' && !shift_pressed) {
+            c = c - 'a' + 'A';
+        } else if (caps_lock && c >= 'A' && c <= 'Z' && shift_pressed) {
+            c = c - 'A' + 'a';
+        }
+        
         if (c) {
             keyboard_buffer[buffer_index] = c;
             buffer_index = (buffer_index + 1) % 256;
@@ -72,11 +88,18 @@ void keyboard_handler(void) {
 char keyboard_getchar(void) {
     while (buffer_read == buffer_index) {
         keyboard_handler();
+        // Small delay to prevent CPU spinning too fast
+        for (volatile int i = 0; i < 100; i++);
     }
     
     char c = keyboard_buffer[buffer_read];
     buffer_read = (buffer_read + 1) % 256;
     return c;
+}
+
+int keyboard_available(void) {
+    keyboard_handler();
+    return buffer_read != buffer_index;
 }
 
 void keyboard_wait_for_key(void) {

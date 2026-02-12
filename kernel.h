@@ -75,11 +75,15 @@ void* memcpy(void* dest, const void* src, size_t len);
 void keyboard_init(void);
 char keyboard_getchar(void);
 void keyboard_handler(void);
+int keyboard_available(void);
 
 // Shell functions
 void shell_init(void);
 void shell_run(void);
 void shell_execute(char* command);
+
+// Kernel functions
+void display_banner(void);
 
 // Utility functions
 void itoa(int value, char* str, int base);

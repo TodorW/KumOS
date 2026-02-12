@@ -19,27 +19,26 @@ void display_banner(void) {
     terminal_clear();
     
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
-    terminal_writestring("  _  __                ___  ____\n");
-    terminal_writestring(" | |/ /   _ _ __ ___  / _ \/ ___|n");
-    terminal_writestring(" | ' / | | | '_ ` _ \| | | \___ \ n");
-    terminal_writestring(" | . \ | |_| | | | | | |_| |___) |n");
-    terminal_writestring(" |_|\ _\____,_|_| |_| \___/|____/ \n");
-    terminal_writestring("                              \n");
+    terminal_writestring("===============================================\n");
+    terminal_writestring("              Welcome to KumOS                \n");
+    terminal_writestring("         Custom Operating System v1.0         \n");
+    terminal_writestring("===============================================\n");
     
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
-    terminal_writestring("\n");
-    terminal_writestring("========================================\n");
-    terminal_writestring("              KumOS v1.0                \n");
-    terminal_writestring("========================================\n");
     terminal_writestring("\n");
     
     terminal_setcolor(vga_entry_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-    terminal_writestring("Welcome to KumOS!\n");
+    terminal_writestring("System Information:\n");
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
-    terminal_writestring("Type 'help' to see available commands.\n");
+    terminal_writestring("  Architecture: x86 (32-bit Protected Mode)\n");
+    terminal_writestring("  Kernel: KumOS Custom Kernel\n");
+    terminal_writestring("  Display: VGA Text Mode (80x25)\n");
     terminal_writestring("\n");
     
-    terminal_writestring("Initializing system...\n");
+    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+    terminal_writestring("Type 'help' to see available commands\n");
+    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
+    terminal_writestring("\n");
 }
 
 // Initialize all kernel subsystems
@@ -50,24 +49,26 @@ void kernel_init(void) {
     // Display boot banner
     display_banner();
     
-    // Initialize keyboard driver
-    terminal_writestring("Loading keyboard driver... ");
-    keyboard_init();
-    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    terminal_writestring("OK\n");
+    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_CYAN, VGA_COLOR_BLACK));
+    terminal_writestring("Initializing KumOS...\n");
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
+    terminal_writestring("\n");
+    
+    // Initialize keyboard driver
+    terminal_writestring("[  OK  ] Keyboard driver loaded\n");
+    keyboard_init();
     
     // Initialize shell
-    terminal_writestring("Loading shell... ");
+    terminal_writestring("[  OK  ] Shell initialized\n");
     shell_init();
-    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    terminal_writestring("OK\n");
-    terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
     
+    terminal_writestring("[  OK  ] System ready\n");
     terminal_writestring("\n");
+    
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-    terminal_writestring("System initialized successfully!\n");
+    terminal_writestring("Boot complete! Welcome to KumOS.\n");
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
+    terminal_writestring("\n");
 }
 
 // Main kernel entry point (called from assembly)
