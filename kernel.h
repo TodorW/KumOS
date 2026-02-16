@@ -15,6 +15,10 @@ typedef signed long long int64_t;
 typedef unsigned long size_t;
 
 #define NULL ((void*)0)
+#define TRUE 1
+#define FALSE 0
+#define TRUE 1
+#define FALSE 0
 
 // Video memory and display
 #define VGA_ADDRESS 0xB8000
@@ -70,6 +74,8 @@ char* strcpy(char* dest, const char* src);
 char* strncpy(char* dest, const char* src, size_t n);
 void* memset(void* dest, int val, size_t len);
 void* memcpy(void* dest, const void* src, size_t len);
+int atoi(const char* str);
+char* strcat(char* dest, const char* src);
 
 // Keyboard functions
 void keyboard_init(void);
@@ -84,6 +90,17 @@ void shell_execute(char* command);
 
 // Kernel functions
 void display_banner(void);
+void kernel_panic(const char* message);
+
+// Timer functions
+void timer_init(void);
+uint32_t timer_ticks(void);
+void timer_wait(uint32_t ticks);
+void timer_tick(void);
+uint32_t timer_get_seconds(void);
+uint32_t timer_get_ticks(void);
+void timer_sleep_ticks(uint32_t ticks);
+void timer_format_uptime(char* buffer);
 
 // Utility functions
 void itoa(int value, char* str, int base);
@@ -98,6 +115,10 @@ static inline uint8_t inb(uint16_t port) {
     uint8_t ret;
     asm volatile ("inb %1, %0" : "=a"(ret) : "Nd"(port));
     return ret;
+}
+
+static inline void io_wait(void) {
+    outb(0x80, 0);
 }
 
 #endif

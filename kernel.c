@@ -54,6 +54,10 @@ void kernel_init(void) {
     terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
     terminal_writestring("\n");
     
+    // Initialize timer
+    terminal_writestring("[  OK  ] Timer initialized\n");
+    timer_init();
+    
     // Initialize keyboard driver
     terminal_writestring("[  OK  ] Keyboard driver loaded\n");
     keyboard_init();
@@ -84,11 +88,16 @@ void kernel_main(void) {
     // Start the shell (this never returns)
     shell_run();
     
-    // Should never reach here
-    terminal_writestring("\n\nKernel panic: Shell exited unexpectedly!\n");
+    // Should NEVER reach here - but if we do, halt forever
+    terminal_setcolor(vga_entry_color(VGA_COLOR_WHITE, VGA_COLOR_RED));
+    terminal_writestring("\n\nKERNEL PANIC: Shell exited!\n");
+    
     while (1) {
-        asm volatile ("hlt");
+        asm volatile ("cli; hlt");
     }
+    
+    // Extra safety - should never execute
+    __builtin_unreachable();
 }
 
 // Kernel panic handler

@@ -130,8 +130,20 @@ void shell_execute(char* command) {
         terminal_writestring("Boot Device: Floppy/USB\n");
     }
     else if (strcmp(cmd, "uptime") == 0) {
-        terminal_writestring("\nSystem uptime: Running since boot\n");
-        terminal_writestring("(PIT timer not yet implemented)\n");
+        char uptime_str[16];
+        timer_format_uptime(uptime_str);
+        terminal_writestring("\n");
+        terminal_setcolor(vga_entry_color(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
+        terminal_writestring("System Uptime\n");
+        terminal_setcolor(vga_entry_color(VGA_COLOR_LIGHT_GREY, VGA_COLOR_BLACK));
+        terminal_writestring("=============\n");
+        terminal_writestring("Time: ");
+        terminal_writestring(uptime_str);
+        terminal_writestring("\nTicks: ");
+        char ticks_str[12];
+        itoa(timer_get_seconds(), ticks_str, 10);
+        terminal_writestring(ticks_str);
+        terminal_writestring(" seconds\n");
     }
     else if (strcmp(cmd, "date") == 0) {
         terminal_writestring("\nCurrent date: 2025-02-12\n");
@@ -254,6 +266,14 @@ void shell_run(void) {
     shell_print_prompt();
     
     while (1) {
+        // Update timer on each loop
+        timer_tick();
+        
+        // Check for keyboard input
+        if (!keyboard_available()) {
+            continue;
+        }
+        
         char c = keyboard_getchar();
         
         if (c == '\n') {
@@ -284,5 +304,10 @@ void shell_run(void) {
                 terminal_putchar(c);
             }
         }
+    }
+    
+    // Safety: Should NEVER reach here
+    while (1) {
+        asm volatile("cli; hlt");
     }
 }

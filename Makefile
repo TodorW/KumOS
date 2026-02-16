@@ -13,8 +13,8 @@ LDFLAGS = -m elf_i386 -T linker.ld
 # Source files
 BOOT_SRC = boot.asm
 KERNEL_ENTRY_SRC = kernel_entry.asm
-C_SOURCES = kernel.c terminal.c string.c keyboard.c shell.c
-OBJS = kernel_entry.o kernel.o terminal.o string.o keyboard.o shell.o
+C_SOURCES = kernel.c terminal.c string.c keyboard.c shell.c timer.c
+OBJS = kernel_entry.o kernel.o terminal.o string.o keyboard.o shell.o timer.o
 
 # Output files
 BOOTLOADER = boot.bin
@@ -40,14 +40,20 @@ kernel_entry.o: $(KERNEL_ENTRY_SRC)
 # Link kernel
 $(KERNEL): $(OBJS)
 	$(LD) $(LDFLAGS) $(OBJS) -o $(KERNEL)
+	@echo "Kernel size: $$(stat -c%s $(KERNEL) 2>/dev/null || stat -f%z $(KERNEL)) bytes"
 
 # Create OS image
 $(OS_IMAGE): $(BOOTLOADER) $(KERNEL)
-	cat $(BOOTLOADER) $(KERNEL) > $(OS_IMAGE)
-	# Pad to 1.44MB (floppy disk size)
-	dd if=/dev/zero of=$(OS_IMAGE) bs=512 count=2880 conv=notrunc 2>/dev/null || true
+	@echo "Creating OS image..."
+	# Create blank 1.44MB image
+	dd if=/dev/zero of=$(OS_IMAGE) bs=512 count=2880 2>/dev/null
+	# Write bootloader to first sector
 	dd if=$(BOOTLOADER) of=$(OS_IMAGE) bs=512 count=1 conv=notrunc 2>/dev/null
+	# Write kernel starting at sector 2
 	dd if=$(KERNEL) of=$(OS_IMAGE) bs=512 seek=1 conv=notrunc 2>/dev/null
+	@echo "Bootloader size: $$(stat -c%s $(BOOTLOADER) 2>/dev/null || stat -f%z $(BOOTLOADER)) bytes (should be 512)"
+	@echo "OS image size: $$(stat -c%s $(OS_IMAGE) 2>/dev/null || stat -f%z $(OS_IMAGE)) bytes"
+	@echo "Build complete!"
 
 # Run in QEMU
 run: $(OS_IMAGE)
