@@ -1,71 +1,58 @@
 # KumOS Makefile
+CC      = gcc
+ASM     = nasm
+LD      = ld
 
-# Compiler and tools
-ASM = nasm
-CC = gcc
-LD = ld
+GCC_INCLUDES := $(shell gcc -m32 -ffreestanding -print-file-name=include)
 
-# Flags
-ASMFLAGS = -f elf32
-CFLAGS = -m32 -ffreestanding -nostdlib -nostdinc -fno-builtin -fno-stack-protector -nostartfiles -nodefaultlibs -Wall -Wextra -c
-LDFLAGS = -m elf_i386 -T linker.ld
+CFLAGS  = -m32 -std=c99 -ffreestanding -O2 -Wall -Wextra \
+          -Iinclude -Idrivers -Ikernel -Ishell \
+          -isystem $(GCC_INCLUDES) \
+          -fno-stack-protector -fno-pic -fno-builtin \
+          -nostdlib -nostdinc
 
-# Source files
-BOOT_SRC = boot.asm
-KERNEL_ENTRY_SRC = kernel_entry.asm
-C_SOURCES = kernel.c terminal.c string.c keyboard.c shell.c timer.c
-OBJS = kernel_entry.o kernel.o terminal.o string.o keyboard.o shell.o timer.o
+LDFLAGS = -m elf_i386 -T kernel/linker.ld --oformat elf32-i386
 
-# Output files
-BOOTLOADER = boot.bin
-KERNEL = kernel.bin
-OS_IMAGE = kumos.img
+OBJS    = boot/boot.o \
+          kernel/kernel.o \
+          kernel/klibc.o \
+          kernel/memory.o \
+          drivers/vga.o \
+          drivers/keyboard.o \
+          shell/shell.o
 
-.PHONY: all clean run
+ISO     = kumos.iso
+KERNEL  = iso/boot/kumos.kernel
 
-all: $(OS_IMAGE)
+.PHONY: all iso clean
 
-# Compile bootloader
-$(BOOTLOADER): $(BOOT_SRC)
-	$(ASM) -f bin $(BOOT_SRC) -o $(BOOTLOADER)
+all: iso
 
-# Compile kernel entry
-kernel_entry.o: $(KERNEL_ENTRY_SRC)
-	$(ASM) $(ASMFLAGS) $(KERNEL_ENTRY_SRC) -o kernel_entry.o
+boot/boot.o: boot/boot.asm
+	$(ASM) -f elf32 $< -o $@
 
-# Compile C source files
-%.o: %.c kernel.h
-	$(CC) $(CFLAGS) $< -o $@
+kernel/%.o: kernel/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-# Link kernel
+drivers/%.o: drivers/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+shell/%.o: shell/%.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(KERNEL): $(OBJS)
-	$(LD) $(LDFLAGS) $(OBJS) -o $(KERNEL)
-	@echo "Kernel size: $$(stat -c%s $(KERNEL) 2>/dev/null || stat -f%z $(KERNEL)) bytes"
+	$(LD) $(LDFLAGS) -o $@ $^
 
-# Create OS image
-$(OS_IMAGE): $(BOOTLOADER) $(KERNEL)
-	@echo "Creating OS image..."
-	# Create blank 1.44MB image
-	dd if=/dev/zero of=$(OS_IMAGE) bs=512 count=2880 2>/dev/null
-	# Write bootloader to first sector
-	dd if=$(BOOTLOADER) of=$(OS_IMAGE) bs=512 count=1 conv=notrunc 2>/dev/null
-	# Write kernel starting at sector 2
-	dd if=$(KERNEL) of=$(OS_IMAGE) bs=512 seek=1 conv=notrunc 2>/dev/null
-	@echo "Bootloader size: $$(stat -c%s $(BOOTLOADER) 2>/dev/null || stat -f%z $(BOOTLOADER)) bytes (should be 512)"
-	@echo "OS image size: $$(stat -c%s $(OS_IMAGE) 2>/dev/null || stat -f%z $(OS_IMAGE)) bytes"
-	@echo "Build complete!"
+iso: $(KERNEL)
+	grub-mkrescue -o $(ISO) iso 2>/dev/null || \
+	grub2-mkrescue -o $(ISO) iso
 
-# Run in QEMU
-run: $(OS_IMAGE)
-	qemu-system-i386 -fda $(OS_IMAGE)
-
-# Run in QEMU without graphics (for testing)
-run-nographic: $(OS_IMAGE)
-	qemu-system-i386 -fda $(OS_IMAGE) -nographic
-
-# Clean build files
 clean:
-	rm -f *.o *.bin $(OS_IMAGE)
+	rm -f $(OBJS) $(KERNEL) $(ISO)
 
-# Build and run
-build-run: all run
+# Run in QEMU (if available)
+run:
+	qemu-system-i386 -cdrom $(ISO) -m 32M
+
+run-kvm:
+	qemu-system-i386 -cdrom $(ISO) -m 32M -enable-kvm
