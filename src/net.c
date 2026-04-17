@@ -1,0 +1,276 @@
+#include "net.h"
+#include "vga.h"
+#include "kstring.h"
+#include "timer.h"
+#include <stdint.h>
+
+static inline void outb(uint16_t p,uint8_t v){__asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p));}
+static inline void outw(uint16_t p,uint16_t v){__asm__ volatile("outw %0,%1"::"a"(v),"Nd"(p));}
+static inline void outl(uint16_t p,uint32_t v){__asm__ volatile("outl %0,%1"::"a"(v),"Nd"(p));}
+static inline uint8_t  inb(uint16_t p){uint8_t v;__asm__ volatile("inb %1,%0":"=a"(v):"Nd"(p));return v;}
+static inline uint16_t inw(uint16_t p){uint16_t v;__asm__ volatile("inw %1,%0":"=a"(v):"Nd"(p));return v;}
+static inline uint32_t inl(uint16_t p){uint32_t v;__asm__ volatile("inl %1,%0":"=a"(v):"Nd"(p));return v;}
+
+#define PCI_ADDR   0xCF8
+#define PCI_DATA   0xCFC
+
+static uint32_t pci_read(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg) {
+    outl(PCI_ADDR, 0x80000000u|(uint32_t)bus<<16|(uint32_t)dev<<11|(uint32_t)fn<<8|(reg&0xFC));
+    return inl(PCI_DATA);
+}
+static void pci_write(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg, uint32_t val) {
+    outl(PCI_ADDR, 0x80000000u|(uint32_t)bus<<16|(uint32_t)dev<<11|(uint32_t)fn<<8|(reg&0xFC));
+    outl(PCI_DATA, val);
+}
+
+#define RTL_VENDOR  0x10EC
+#define RTL_DEVICE  0x8139
+
+#define RTL_MAC0    0x00
+#define RTL_MAR0    0x08
+#define RTL_TSD0    0x10
+#define RTL_TSAD0   0x20
+#define RTL_RBSTART 0x30
+#define RTL_CMD     0x37
+#define RTL_CAPR    0x38
+#define RTL_CBR     0x3A
+#define RTL_IMR     0x3C
+#define RTL_ISR     0x3E
+#define RTL_TCR     0x40
+#define RTL_RCR     0x44
+#define RTL_MPC     0x4C
+#define RTL_CONFIG1 0x52
+
+#define TX_BUFS     4
+#define TX_BUF_SIZE 1536
+#define RX_BUF_SIZE (8192+16+1500)
+
+static uint16_t rtl_iobase = 0;
+static uint8_t  tx_buf[TX_BUFS][TX_BUF_SIZE] __attribute__((aligned(4)));
+static uint8_t  rx_buf[RX_BUF_SIZE+4]         __attribute__((aligned(4)));
+static int      tx_idx = 0;
+static int      rtl_ready_flag = 0;
+
+static uint8_t  my_mac[ETH_ALEN];
+static uint32_t my_ip  = NET_IP(10,0,2,15);
+static uint32_t gw_ip  = NET_IP(10,0,2,2);
+static uint32_t net_mask = NET_IP(255,255,255,0);
+
+static uint8_t  arp_cache_ip[8][4];
+static uint8_t  arp_cache_mac[8][ETH_ALEN];
+static int      arp_count = 0;
+
+#define RX_RING_SIZE 4
+static struct { uint8_t buf[1600]; uint16_t len; } rx_ring[RX_RING_SIZE];
+static int rx_head = 0, rx_tail = 0;
+
+static int find_rtl8139(uint8_t *bus_out, uint8_t *dev_out) {
+    for (uint8_t bus=0; bus<8; bus++) {
+        for (uint8_t dev=0; dev<32; dev++) {
+            uint32_t id = pci_read(bus,dev,0,0);
+            uint16_t vendor=(uint16_t)(id&0xFFFF);
+            uint16_t device=(uint16_t)(id>>16);
+            if (vendor==RTL_VENDOR && device==RTL_DEVICE) {
+                *bus_out=bus; *dev_out=dev; return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static uint16_t ip_checksum(const void *data, uint32_t len) {
+    const uint16_t *p = (const uint16_t *)data;
+    uint32_t sum = 0;
+    while (len > 1) { sum += *p++; len -= 2; }
+    if (len) sum += *(const uint8_t *)p;
+    while (sum>>16) sum = (sum&0xFFFF)+(sum>>16);
+    return (uint16_t)~sum;
+}
+
+int net_init(void) {
+    uint8_t bus=0, dev_n=0;
+    if (!find_rtl8139(&bus, &dev_n)) return -1;
+
+    uint32_t bar0 = pci_read(bus,dev_n,0,0x10);
+    if (!(bar0&1)) return -1;
+    rtl_iobase = (uint16_t)(bar0 & 0xFFFC);
+
+    uint32_t cmd = pci_read(bus,dev_n,0,0x04);
+    pci_write(bus,dev_n,0,0x04, cmd|0x07);
+
+    outb(rtl_iobase+RTL_CONFIG1, 0x00);
+    outb(rtl_iobase+RTL_CMD, 0x10);
+    while (inb(rtl_iobase+RTL_CMD)&0x10) {}
+
+    for (int i=0;i<ETH_ALEN;i++) my_mac[i]=inb(rtl_iobase+RTL_MAC0+i);
+
+    outl(rtl_iobase+RTL_RBSTART, (uint32_t)rx_buf);
+    outw(rtl_iobase+RTL_IMR, 0x0005);
+    outl(rtl_iobase+RTL_RCR, 0x0000000F);
+    outl(rtl_iobase+RTL_TCR, 0x03000700);
+    outb(rtl_iobase+RTL_CMD, 0x0C);
+
+    for (int i=0;i<TX_BUFS;i++)
+        outl(rtl_iobase+RTL_TSAD0+i*4, (uint32_t)tx_buf[i]);
+
+    rtl_ready_flag = 1;
+    return 0;
+}
+
+int  net_ready(void) { return rtl_ready_flag; }
+void net_get_mac(uint8_t mac[ETH_ALEN]) { kmemcpy(mac, my_mac, ETH_ALEN); }
+uint32_t net_get_ip(void) { return my_ip; }
+
+int net_send_raw(const void *frame, uint16_t len) {
+    if (!rtl_ready_flag || len > TX_BUF_SIZE) return -1;
+    kmemcpy(tx_buf[tx_idx], frame, len);
+    outl(rtl_iobase+RTL_TSD0+tx_idx*4, len);
+    tx_idx = (tx_idx+1) % TX_BUFS;
+    int tries=10000;
+    while(tries--) { if(inl(rtl_iobase+RTL_TSD0+((tx_idx+TX_BUFS-1)%TX_BUFS)*4)&0x8000) break; }
+    return 0;
+}
+
+static void arp_learn(uint32_t ip, const uint8_t mac[ETH_ALEN]) {
+    for (int i=0;i<arp_count;i++) {
+        uint32_t cached; kmemcpy(&cached, arp_cache_ip[i], 4);
+        if (cached==ip) { kmemcpy(arp_cache_mac[i],mac,ETH_ALEN); return; }
+    }
+    if (arp_count<8) {
+        kmemcpy(arp_cache_ip[arp_count],&ip,4);
+        kmemcpy(arp_cache_mac[arp_count],mac,ETH_ALEN);
+        arp_count++;
+    }
+}
+
+static int arp_lookup(uint32_t ip, uint8_t mac_out[ETH_ALEN]) {
+    for (int i=0;i<arp_count;i++) {
+        uint32_t cached; kmemcpy(&cached,arp_cache_ip[i],4);
+        if (cached==ip) { kmemcpy(mac_out,arp_cache_mac[i],ETH_ALEN); return 1; }
+    }
+    return 0;
+}
+
+static void send_arp_request(uint32_t target_ip) {
+    uint8_t frame[42]; kmemset(frame,0,42);
+    eth_hdr_t *eth=(eth_hdr_t*)frame;
+    kmemset(eth->dst,0xFF,ETH_ALEN);
+    kmemcpy(eth->src,my_mac,ETH_ALEN);
+    eth->type=NET_HTONS(ETH_P_ARP);
+    arp_pkt_t *arp=(arp_pkt_t*)(frame+14);
+    arp->hw_type[0]=0; arp->hw_type[1]=1;
+    arp->proto_type[0]=8; arp->proto_type[1]=0;
+    arp->hw_len=6; arp->proto_len=4;
+    arp->operation=NET_HTONS(1);
+    kmemcpy(arp->sender_mac,my_mac,ETH_ALEN);
+    arp->sender_ip=NET_HTONL(my_ip);
+    kmemset(arp->target_mac,0,ETH_ALEN);
+    arp->target_ip=NET_HTONL(target_ip);
+    net_send_raw(frame,42);
+}
+
+int net_send_udp(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
+                 const void *data, uint16_t data_len) {
+    if (!rtl_ready_flag) return -1;
+    uint8_t dst_mac[ETH_ALEN];
+    uint32_t nexthop = ((dst_ip & NET_HTONL(net_mask)) == (my_ip & NET_HTONL(net_mask)))
+                       ? dst_ip : gw_ip;
+    if (!arp_lookup(nexthop, dst_mac)) {
+        send_arp_request(nexthop);
+        timer_sleep(50);
+        if (!arp_lookup(nexthop, dst_mac)) kmemset(dst_mac,0xFF,ETH_ALEN);
+    }
+    uint16_t ip_len  = 20 + 8 + data_len;
+    uint16_t udp_len = 8 + data_len;
+    uint8_t  pkt[1500];
+    eth_hdr_t *eth=(eth_hdr_t*)pkt;
+    kmemcpy(eth->dst,dst_mac,ETH_ALEN);
+    kmemcpy(eth->src,my_mac,ETH_ALEN);
+    eth->type=NET_HTONS(ETH_P_IP);
+    ip_hdr_t *ip=(ip_hdr_t*)(pkt+14);
+    ip->version_ihl=0x45; ip->tos=0;
+    ip->total_len=NET_HTONS(ip_len);
+    ip->id=NET_HTONS(1); ip->flags_frag=0;
+    ip->ttl=64; ip->protocol=IPPROTO_UDP;
+    ip->checksum=0;
+    ip->src_ip=NET_HTONL(my_ip);
+    ip->dst_ip=NET_HTONL(dst_ip);
+    ip->checksum=ip_checksum(ip,20);
+    udp_hdr_t *udp=(udp_hdr_t*)(pkt+14+20);
+    udp->src_port=NET_HTONS(src_port);
+    udp->dst_port=NET_HTONS(dst_port);
+    udp->length=NET_HTONS(udp_len);
+    udp->checksum=0;
+    kmemcpy(pkt+14+20+8,data,data_len);
+    return net_send_raw(pkt,(uint16_t)(14+ip_len));
+}
+
+void net_poll(void) {
+    if (!rtl_ready_flag) return;
+    uint16_t isr = inw(rtl_iobase+RTL_ISR);
+    if (!(isr & 0x01)) return;
+    outw(rtl_iobase+RTL_ISR, isr);
+    uint16_t rx_ptr=0;
+    while (!(inb(rtl_iobase+RTL_CMD)&0x01)) {
+        uint16_t off = inw(rtl_iobase+RTL_CAPR)+16;
+        uint8_t *p = rx_buf + (off % (8192+16));
+        uint16_t pkt_len = *(uint16_t*)(p+2);
+        if (pkt_len==0||pkt_len>1514) break;
+        uint8_t *payload = p+4;
+        eth_hdr_t *eth=(eth_hdr_t*)payload;
+        uint16_t etype=NET_HTONS(eth->type);
+        if (etype==ETH_P_ARP && pkt_len>=14+sizeof(arp_pkt_t)) {
+            arp_pkt_t *arp=(arp_pkt_t*)(payload+14);
+            arp_learn(NET_HTONL(arp->sender_ip), arp->sender_mac);
+        } else if (etype==ETH_P_IP && pkt_len>=14+20) {
+            ip_hdr_t *ip=(ip_hdr_t*)(payload+14);
+            if (ip->protocol==IPPROTO_UDP && pkt_len>=14+20+8) {
+                if ((rx_head+1)%RX_RING_SIZE != rx_tail) {
+                    kmemcpy(rx_ring[rx_head].buf, payload, pkt_len);
+                    rx_ring[rx_head].len = pkt_len;
+                    rx_head=(rx_head+1)%RX_RING_SIZE;
+                }
+            }
+        }
+        rx_ptr = (uint16_t)((off + pkt_len + 4 + 3) & ~3);
+        outw(rtl_iobase+RTL_CAPR, (uint16_t)(rx_ptr-16));
+        (void)rx_ptr;
+        break;
+    }
+}
+
+int net_recv_udp(uint16_t port, void *buf, uint16_t bufsz,
+                 uint32_t *src_ip, uint16_t *src_port) {
+    net_poll();
+    if (rx_head == rx_tail) return 0;
+    uint8_t *f = rx_ring[rx_tail].buf;
+    uint16_t len = rx_ring[rx_tail].len;
+    rx_tail=(rx_tail+1)%RX_RING_SIZE;
+    if (len < 14+20+8) return 0;
+    ip_hdr_t  *ip  = (ip_hdr_t*) (f+14);
+    udp_hdr_t *udp = (udp_hdr_t*)(f+14+20);
+    if (NET_HTONS(udp->dst_port) != port) return 0;
+    uint16_t data_len = (uint16_t)(NET_HTONS(udp->length)-8);
+    if (data_len > bufsz) data_len = (uint16_t)bufsz;
+    kmemcpy(buf, f+14+20+8, data_len);
+    if (src_ip)   *src_ip   = NET_HTONL(ip->src_ip);
+    if (src_port) *src_port = NET_HTONS(udp->src_port);
+    return data_len;
+}
+
+void net_print_info(void) {
+    vga_set_color(VGA_YELLOW,VGA_BLACK);
+    vga_puts("\n  === Network ===\n\n");
+    vga_set_color(VGA_WHITE,VGA_BLACK);
+    if (!rtl_ready_flag) { vga_puts("  No NIC found.\n\n"); return; }
+    vga_puts("  NIC:  RTL8139\n  MAC:  ");
+    for (int i=0;i<ETH_ALEN;i++) {
+        const char *h="0123456789ABCDEF";
+        vga_putchar(h[my_mac[i]>>4]); vga_putchar(h[my_mac[i]&0xF]);
+        if(i<5) vga_putchar(':');
+    }
+    vga_putchar('\n');
+    vga_puts("  IP:   10.0.2.15\n");
+    vga_puts("  GW:   10.0.2.2\n");
+    vga_puts("  QEMU: -nic user\n\n");
+}

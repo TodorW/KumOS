@@ -1,58 +1,53 @@
-# KumOS Makefile
-CC      = gcc
-ASM     = nasm
-LD      = ld
+GCC_INC := $(shell find /usr/lib/gcc -name "stddef.h" 2>/dev/null | head -1 | xargs dirname)
+CC       = gcc
+CFLAGS   = -m32 -ffreestanding -O2 -Wall -fno-stack-protector -fno-builtin \
+           -nostdlib -nostdinc -I$(GCC_INC) -Isrc
+ASM      = nasm
+ASMFLAGS = -f elf32
+LD       = ld
+LDFLAGS  = -m elf_i386 -T linker.ld
+UFLAGS   = -m32 -nostdlib -nostartfiles -static -O2 -fno-stack-protector -fno-builtin \
+           -Wl,--build-id=none -Wl,-z,norelro -Iuser
+GRUB_MKR = $(shell command -v grub2-mkrescue 2>/dev/null || command -v grub-mkrescue 2>/dev/null)
 
-GCC_INCLUDES := $(shell gcc -m32 -ffreestanding -print-file-name=include)
+KERN_OBJS = \
+    boot/boot.o boot/gdt_flush.o boot/isr_stubs.o boot/sched_switch.o \
+    src/kstring.o src/vga.o src/keyboard.o src/kmalloc.o \
+    src/process.o src/fs.o src/gdt.o src/idt.o \
+    src/timer.o src/sched.o src/paging.o \
+    src/ata.o src/fat12.o src/pipe.o src/vfs.o \
+    src/signal.o src/net.o src/procfs.o \
+    src/syscall.o src/userspace.o src/elf.o \
+    src/serial.o src/rtc.o src/mouse.o src/gui.o src/kernel.o
 
-CFLAGS  = -m32 -std=c99 -ffreestanding -O2 -Wall -Wextra \
-          -Iinclude -Idrivers -Ikernel -Ishell \
-          -isystem $(GCC_INCLUDES) \
-          -fno-stack-protector -fno-pic -fno-builtin \
-          -nostdlib -nostdinc
-
-LDFLAGS = -m elf_i386 -T kernel/linker.ld --oformat elf32-i386
-
-OBJS    = boot/boot.o \
-          kernel/kernel.o \
-          kernel/klibc.o \
-          kernel/memory.o \
-          drivers/vga.o \
-          drivers/keyboard.o \
-          shell/shell.o
-
-ISO     = kumos.iso
-KERNEL  = iso/boot/kumos.kernel
-
-.PHONY: all iso clean
-
-all: iso
-
-boot/boot.o: boot/boot.asm
-	$(ASM) -f elf32 $< -o $@
-
-kernel/%.o: kernel/%.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-drivers/%.o: drivers/%.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-shell/%.o: shell/%.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-$(KERNEL): $(OBJS)
-	$(LD) $(LDFLAGS) -o $@ $^
-
-iso: $(KERNEL)
-	grub-mkrescue -o $(ISO) iso 2>/dev/null || \
-	grub2-mkrescue -o $(ISO) iso
-
+all: kumos.bin
+boot/%.o: boot/%.asm
+	@$(ASM) $(ASMFLAGS) $< -o $@
+src/%.o: src/%.c
+	@$(CC) $(CFLAGS) -c $< -o $@
+kumos.bin: $(KERN_OBJS)
+	@$(LD) $(LDFLAGS) -o $@ $(KERN_OBJS)
+	@echo "Kernel: $$(ls -lh $@ | awk '{print $$5}')"
+user/%.elf: user/%.c
+	@$(CC) $(UFLAGS) -Ttext=0x400000 -o $@ $<
+	@strip $@
+user-programs: user/hello.elf user/counter.elf user/cat.elf user/sysinfo.elf user/kush.elf
+iso: kumos.bin
+	@mkdir -p iso/boot/grub
+	@cp kumos.bin iso/boot/kumos.bin && cp grub.cfg iso/boot/grub/grub.cfg
+	@$(GRUB_MKR) -o kumos.iso iso/ 2>/dev/null
+	@echo "ISO: $$(ls -lh kumos.iso | awk '{print $$5}')"
+run: iso
+	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
+	    -boot order=d -cdrom kumos.iso -hda disk.img -m 128M -vga std -no-reboot
+run-net: iso
+	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
+	    -boot order=d -cdrom kumos.iso -hda disk.img -m 128M -vga std -no-reboot \
+	    -nic user
+run-serial: iso
+	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
+	    -boot order=d -cdrom kumos.iso -hda disk.img -m 128M -vga std -no-reboot \
+	    -serial stdio
 clean:
-	rm -f $(OBJS) $(KERNEL) $(ISO)
-
-# Run in QEMU (if available)
-run:
-	qemu-system-i386 -cdrom $(ISO) -m 32M
-
-run-kvm:
-	qemu-system-i386 -cdrom $(ISO) -m 32M -enable-kvm
+	@rm -f $(KERN_OBJS) kumos.bin kumos.iso iso/boot/kumos.bin user/*.elf
+.PHONY: all iso run run-net run-serial clean user-programs

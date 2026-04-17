@@ -1,0 +1,196 @@
+
+#include "elf.h"
+#include "paging.h"
+#include "fat12.h"
+#include "fs.h"
+#include "vga.h"
+#include "kstring.h"
+#include "kmalloc.h"
+#include "sched.h"
+#include "gdt.h"
+#include <stdint.h>
+
+#define USER_CS  0x1B
+#define USER_DS  0x23
+#define ELF_USER_STACK_SIZE  16384
+#define ELF_USER_STACK_TOP   0x40000000
+
+int elf_validate(const elf32_hdr_t *hdr) {
+    if (hdr->magic   != ELF_MAGIC) return -1;
+    if (hdr->class   != 1)         return -2;
+    if (hdr->machine != EM_386)    return -2;
+    if (hdr->type    != ET_EXEC)   return -2;
+    if (hdr->phnum   == 0)         return -2;
+    return 0;
+}
+
+elf_load_result_t elf_load_mem(const void *buf, uint32_t bufsz) {
+    elf_load_result_t res = {0, 0, 0, 0};
+    const uint8_t *data = (const uint8_t *)buf;
+
+    if (bufsz < sizeof(elf32_hdr_t)) { res.error = -1; return res; }
+
+    const elf32_hdr_t *hdr = (const elf32_hdr_t *)data;
+    if (elf_validate(hdr) < 0) { res.error = -2; return res; }
+
+    res.entry     = hdr->entry;
+    res.load_base = 0xFFFFFFFF;
+    res.load_end  = 0;
+
+    for (int i = 0; i < hdr->phnum; i++) {
+        uint32_t phoff = hdr->phoff + i * hdr->phentsize;
+        if (phoff + sizeof(elf32_phdr_t) > bufsz) continue;
+
+        const elf32_phdr_t *ph = (const elf32_phdr_t *)(data + phoff);
+        if (ph->type != PT_LOAD) continue;
+        if (ph->memsz == 0)      continue;
+
+        if (ph->vaddr < 0x100000) continue;
+        if (ph->vaddr >= 0xC0000000) continue;
+
+        if (ph->vaddr >= 0x100000 && ph->vaddr < 0x500000) {
+            res.error = -2; return res;
+        }
+
+        uint32_t vstart = ph->vaddr & ~0xFFF;
+        uint32_t vend   = PAGE_ALIGN(ph->vaddr + ph->memsz);
+        uint32_t flags  = PAGE_USER | PAGE_WRITE;
+
+        for (uint32_t va = vstart; va < vend; va += PAGE_SIZE) {
+            if (!paging_is_mapped(va)) {
+                uint32_t phys = pmm_alloc();
+                if (!phys) { res.error = -3; return res; }
+                kmemset((void *)phys, 0, PAGE_SIZE);
+                paging_map(va, phys, flags);
+            }
+        }
+
+        if (ph->filesz > 0) {
+            uint32_t src_off = ph->offset;
+            uint32_t copy    = ph->filesz;
+            if (src_off + copy > bufsz) copy = bufsz - src_off;
+            kmemcpy((void *)ph->vaddr, data + src_off, copy);
+        }
+
+        if (ph->memsz > ph->filesz) {
+            kmemset((void *)(ph->vaddr + ph->filesz), 0,
+                    ph->memsz - ph->filesz);
+        }
+
+        if (ph->vaddr < res.load_base) res.load_base = ph->vaddr;
+        if (ph->vaddr + ph->memsz > res.load_end)
+            res.load_end = ph->vaddr + ph->memsz;
+    }
+
+    if (res.load_base == 0xFFFFFFFF) { res.error = -2; return res; }
+    return res;
+}
+
+#define ELF_MAX_SIZE (128 * 1024)
+static uint8_t elf_load_buf[ELF_MAX_SIZE];
+
+elf_load_result_t elf_load_disk(const char *filename) {
+    elf_load_result_t res = {0,0,0,-4};
+
+    if (!fat12_mounted()) return res;
+
+    int n = fat12_read(filename, elf_load_buf, ELF_MAX_SIZE);
+    if (n <= 0) {
+
+        fs_file_t *mf = fs_find(filename);
+        if (!mf) return res;
+        n = (int)mf->size;
+        if (n > ELF_MAX_SIZE) n = ELF_MAX_SIZE;
+        kmemcpy(elf_load_buf, mf->data, (uint32_t)n);
+    }
+
+    return elf_load_mem(elf_load_buf, (uint32_t)n);
+}
+
+static void elf_placeholder(void) {
+    for (;;) __asm__ volatile ("hlt");
+}
+
+int elf_spawn(const char *name, elf_load_result_t *res) {
+    if (!res || res->error != 0) return -1;
+
+    uint32_t stack_top  = ELF_USER_STACK_TOP;
+    uint32_t stack_base = stack_top - ELF_USER_STACK_SIZE;
+
+    for (uint32_t va = stack_base; va < stack_top; va += PAGE_SIZE) {
+        if (!paging_is_mapped(va)) {
+            uint32_t phys = pmm_alloc();
+            if (!phys) return -1;
+            kmemset((void *)phys, 0, PAGE_SIZE);
+            paging_map(va, phys, PAGE_WRITE | PAGE_USER);
+        }
+    }
+
+    uint32_t *kstack = kmalloc(8192);
+    if (!kstack) return -1;
+
+    uint32_t *sp = (uint32_t *)((uint8_t *)kstack + 8192);
+
+    uint32_t user_esp = stack_top - 4;
+
+    *--sp = USER_DS;
+    *--sp = user_esp;
+    *--sp = 0x202;
+    *--sp = USER_CS;
+    *--sp = res->entry;
+
+    for (int i = 0; i < 8; i++) *--sp = 0;
+
+    *--sp = USER_DS;
+
+    *--sp = 0;
+    *--sp = 0;
+
+    int pid = sched_spawn(name, elf_placeholder, 0);
+    if (pid < 0) { kfree(kstack); return -1; }
+
+    task_t *t = sched_get_task(pid);
+    if (t) {
+
+        if (t->stack) kfree(t->stack);
+        t->stack      = kstack;
+        t->stack_size = 8192;
+        t->esp        = (uint32_t)sp;
+    }
+
+    return pid;
+}
+
+void elf_print_info(const void *buf, uint32_t bufsz) {
+    if (bufsz < sizeof(elf32_hdr_t)) {
+        vga_puts("  Buffer too small for ELF header\n"); return;
+    }
+    const elf32_hdr_t *hdr = (const elf32_hdr_t *)buf;
+    if (elf_validate(hdr) < 0) {
+        vga_puts("  Not a valid x86 ELF32 executable\n"); return;
+    }
+    const uint8_t *data = (const uint8_t *)buf;
+
+    vga_set_color(VGA_YELLOW, VGA_BLACK);
+    vga_puts("\n  === ELF Info ===\n\n");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_puts("  Type:     ELF32 x86 Executable\n");
+    vga_puts("  Entry:    0x"); vga_put_hex(hdr->entry); vga_putchar('\n');
+    vga_puts("  Segments: "); vga_put_dec(hdr->phnum); vga_putchar('\n');
+
+    for (int i = 0; i < hdr->phnum; i++) {
+        uint32_t off = hdr->phoff + i * hdr->phentsize;
+        if (off + sizeof(elf32_phdr_t) > bufsz) break;
+        const elf32_phdr_t *ph = (const elf32_phdr_t *)(data + off);
+        if (ph->type != PT_LOAD) continue;
+        vga_puts("  LOAD  vaddr=0x"); vga_put_hex(ph->vaddr);
+        vga_puts("  filesz="); vga_put_dec(ph->filesz);
+        vga_puts("  memsz=");  vga_put_dec(ph->memsz);
+        vga_puts("  flags=");
+        if (ph->flags & PF_R) vga_putchar('R');
+        if (ph->flags & PF_W) vga_putchar('W');
+        if (ph->flags & PF_X) vga_putchar('X');
+        vga_putchar('\n');
+    }
+    vga_putchar('\n');
+}

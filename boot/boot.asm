@@ -1,5 +1,3 @@
-; KumOS Multiboot entry point
-; GRUB will load us, set up CPU, jump here
 
 MBOOT_PAGE_ALIGN    equ 1<<0
 MBOOT_MEM_INFO      equ 1<<1
@@ -16,7 +14,7 @@ align 4
 section .bss
 align 16
 stack_bottom:
-    resb 16384          ; 16 KB stack
+    resb 16384
 stack_top:
 
 section .text
@@ -24,14 +22,11 @@ global _start
 extern kernel_main
 
 _start:
-    mov esp, stack_top  ; set up stack
-    push ebx            ; multiboot info struct pointer
-    push eax            ; multiboot magic
-
-    call kernel_main    ; jump to C kernel
-
-    ; Should never return, but just in case:
-.hang:
+    mov esp, stack_top
+    push ebx
+    push eax
+    call kernel_main
     cli
+.hang:
     hlt
     jmp .hang

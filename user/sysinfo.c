@@ -1,0 +1,32 @@
+#include "kumos_libc.h"
+
+int main(void) {
+    printf("\n");
+    printf("  ========== KumOS System Info ==========\n\n");
+    printf("  OS:      KumOS v1.5\n");
+    printf("  Arch:    x86 (i686)\n");
+    printf("  PID:     %d\n", getpid());
+    printf("  Uptime:  %u seconds\n", uptime());
+
+    time_t t;
+    if (gettime(&t) == 0)
+        printf("  Time:    %04d-%02d-%02d %02d:%02d:%02d\n",
+               t.year, t.month, t.day, t.hour, t.minute, t.second);
+
+    printf("\n  Listing disk files:\n");
+    char dirbuf[512];
+    int n = _syscall(SYS_LISTDIR, (int)dirbuf, 512, 0);
+    if (n > 0) {
+        dirbuf[n] = 0;
+
+        char *p = dirbuf;
+        while (*p) {
+            char *nl = strchr(p, '\n');
+            if (nl) *nl = 0;
+            printf("    %s\n", p);
+            p = nl ? nl+1 : p + strlen(p);
+        }
+    }
+    printf("\n");
+    return 0;
+}
