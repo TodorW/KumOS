@@ -6,6 +6,7 @@
 #include "rtc.h"
 #include "net.h"
 #include "vga.h"
+#include "dmesg.h"
 #include "kstring.h"
 extern uint32_t total_mem_kb;
 #include <stdint.h>
@@ -88,6 +89,7 @@ static int proc_open(const char *path, int flags) {
     if (kstrcmp(path,"ps")==0)        { build_ps();      return 4; }
     if (kstrcmp(path,"net")==0)       { build_net();     return 5; }
     if (kstrcmp(path,"date")==0)      { build_date();    return 6; }
+    if (kstrcmp(path,"dmesg")==0)     { dmesg_read(proc_buf, sizeof(proc_buf)); return 7; }
     return -1;
 }
 
@@ -112,7 +114,7 @@ static int proc_stat(const char *path, vfs_stat_t *st) {
 }
 static int proc_readdir(const char *path, char *buf, uint32_t sz) {
     (void)path; (void)sz;
-    kstrcpy(buf,"meminfo\nuptime\nversion\nps\nnet\ndate\n");
+    kstrcpy(buf,"meminfo\nuptime\nversion\nps\nnet\ndate\ndmesg\n");
     return (int)kstrlen(buf);
 }
 

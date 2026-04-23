@@ -230,6 +230,8 @@ void net_poll(void) {
                     rx_ring[rx_head].len = pkt_len;
                     rx_head=(rx_head+1)%RX_RING_SIZE;
                 }
+            } else if (ip->protocol==IPPROTO_TCP && pkt_len>=14+20+20) {
+                tcp_process(payload, pkt_len);
             }
         }
         rx_ptr = (uint16_t)((off + pkt_len + 4 + 3) & ~3);
@@ -273,4 +275,178 @@ void net_print_info(void) {
     vga_puts("  IP:   10.0.2.15\n");
     vga_puts("  GW:   10.0.2.2\n");
     vga_puts("  QEMU: -nic user\n\n");
+}
+
+#define TCP_MAX_SOCKETS  8
+#define TCP_BUF_SIZE     4096
+
+typedef enum {
+    TCP_CLOSED=0, TCP_SYN_SENT, TCP_SYN_RECV,
+    TCP_ESTABLISHED, TCP_FIN_WAIT1, TCP_FIN_WAIT2,
+    TCP_CLOSE_WAIT, TCP_LAST_ACK, TCP_TIME_WAIT
+} tcp_state_t;
+
+typedef struct {
+    tcp_state_t state;
+    uint32_t    local_ip, remote_ip;
+    uint16_t    local_port, remote_port;
+    uint32_t    seq, ack;
+    uint8_t     rbuf[TCP_BUF_SIZE];
+    uint32_t    rbuf_head, rbuf_tail;
+    int         used;
+} tcp_socket_t;
+
+static tcp_socket_t tcp_sockets[TCP_MAX_SOCKETS];
+static uint16_t     tcp_next_port = 49152;
+
+typedef struct {
+    uint16_t src_port, dst_port;
+    uint32_t seq, ack_seq;
+    uint8_t  data_offset;
+    uint8_t  flags;
+    uint16_t window, checksum, urg_ptr;
+} __attribute__((packed)) tcp_hdr_t;
+
+#define TCP_FIN  0x01
+#define TCP_SYN  0x02
+#define TCP_RST  0x04
+#define TCP_ACK  0x10
+
+static void tcp_send_raw(tcp_socket_t *s, uint8_t flags,
+                         const void *data, uint16_t dlen) {
+    uint8_t pkt[1500]; kmemset(pkt,0,sizeof(pkt));
+    uint16_t tcp_len = 20 + dlen;
+    uint16_t ip_len  = 20 + tcp_len;
+
+    uint8_t dst_mac[ETH_ALEN];
+    if (!arp_lookup(s->remote_ip, dst_mac)) kmemset(dst_mac,0xFF,ETH_ALEN);
+
+    eth_hdr_t *eth=(eth_hdr_t*)pkt;
+    kmemcpy(eth->dst,dst_mac,ETH_ALEN);
+    kmemcpy(eth->src,my_mac,ETH_ALEN);
+    eth->type=NET_HTONS(ETH_P_IP);
+
+    ip_hdr_t *ip=(ip_hdr_t*)(pkt+14);
+    ip->version_ihl=0x45; ip->total_len=NET_HTONS(ip_len);
+    ip->ttl=64; ip->protocol=IPPROTO_TCP;
+    ip->src_ip=NET_HTONL(s->local_ip);
+    ip->dst_ip=NET_HTONL(s->remote_ip);
+    ip->checksum=ip_checksum(ip,20);
+
+    tcp_hdr_t *tcp=(tcp_hdr_t*)(pkt+14+20);
+    tcp->src_port = NET_HTONS(s->local_port);
+    tcp->dst_port = NET_HTONS(s->remote_port);
+    tcp->seq      = NET_HTONL(s->seq);
+    tcp->ack_seq  = (flags&TCP_ACK)?NET_HTONL(s->ack):0;
+    tcp->data_offset = 0x50;
+    tcp->flags    = flags;
+    tcp->window   = NET_HTONS(4096);
+    if (dlen) kmemcpy(pkt+14+20+20, data, dlen);
+    net_send_raw(pkt,(uint16_t)(14+ip_len));
+
+    if (flags&(TCP_SYN|TCP_FIN)) s->seq++;
+    s->seq += dlen;
+}
+
+int tcp_connect(uint32_t dst_ip, uint16_t dst_port) {
+    int s=-1;
+    for (int i=0;i<TCP_MAX_SOCKETS;i++)
+        if (!tcp_sockets[i].used) { s=i; break; }
+    if (s<0) return -1;
+
+    kmemset(&tcp_sockets[s],0,sizeof(tcp_socket_t));
+    tcp_sockets[s].used=1;
+    tcp_sockets[s].local_ip   = my_ip;
+    tcp_sockets[s].remote_ip  = dst_ip;
+    tcp_sockets[s].local_port = tcp_next_port++;
+    tcp_sockets[s].remote_port= dst_port;
+    tcp_sockets[s].seq        = 0x1000;
+    tcp_sockets[s].state      = TCP_SYN_SENT;
+
+    send_arp_request(dst_ip);
+    timer_sleep(20);
+    tcp_send_raw(&tcp_sockets[s], TCP_SYN, 0, 0);
+
+    for (int tries=0; tries<100; tries++) {
+        net_poll();
+        if (tcp_sockets[s].state==TCP_ESTABLISHED) return s;
+        timer_sleep(10);
+    }
+    tcp_sockets[s].used=0;
+    return -1;
+}
+
+int tcp_send(int s, const void *data, uint16_t len) {
+    if (s<0||s>=TCP_MAX_SOCKETS||!tcp_sockets[s].used) return -1;
+    if (tcp_sockets[s].state!=TCP_ESTABLISHED) return -1;
+    tcp_send_raw(&tcp_sockets[s], TCP_ACK, data, len);
+    return len;
+}
+
+int tcp_recv(int s, void *buf, uint16_t len) {
+    if (s<0||s>=TCP_MAX_SOCKETS||!tcp_sockets[s].used) return -1;
+    tcp_socket_t *sock=&tcp_sockets[s];
+    uint32_t avail=(sock->rbuf_head-sock->rbuf_tail+TCP_BUF_SIZE)%TCP_BUF_SIZE;
+    if (avail==0) return 0;
+    if (len>avail) len=(uint16_t)avail;
+    for (uint16_t i=0;i<len;i++) {
+        ((uint8_t*)buf)[i]=sock->rbuf[sock->rbuf_tail];
+        sock->rbuf_tail=(sock->rbuf_tail+1)%TCP_BUF_SIZE;
+    }
+    return len;
+}
+
+void tcp_close(int s) {
+    if (s<0||s>=TCP_MAX_SOCKETS||!tcp_sockets[s].used) return;
+    tcp_send_raw(&tcp_sockets[s], TCP_FIN|TCP_ACK, 0, 0);
+    tcp_sockets[s].state=TCP_FIN_WAIT1;
+    timer_sleep(100);
+    tcp_sockets[s].used=0;
+}
+
+void tcp_process(uint8_t *frame, uint16_t len) {
+    if (len < 14+20+20) return;
+    ip_hdr_t  *ip  = (ip_hdr_t*)(frame+14);
+    tcp_hdr_t *tcp = (tcp_hdr_t*)(frame+14+20);
+
+    uint32_t src_ip   = NET_HTONL(ip->src_ip);
+    uint16_t src_port = NET_HTONS(tcp->src_port);
+    uint16_t dst_port = NET_HTONS(tcp->dst_port);
+    uint32_t seq      = NET_HTONL(tcp->seq);
+    uint32_t ack_seq  = NET_HTONL(tcp->ack_seq);
+
+    for (int i=0;i<TCP_MAX_SOCKETS;i++) {
+        tcp_socket_t *s=&tcp_sockets[i];
+        if (!s->used||s->remote_ip!=src_ip||s->remote_port!=src_port
+            ||s->local_port!=dst_port) continue;
+
+        if (s->state==TCP_SYN_SENT && (tcp->flags&(TCP_SYN|TCP_ACK))==(TCP_SYN|TCP_ACK)) {
+            s->ack = seq+1;
+            s->seq = ack_seq;
+            s->state = TCP_ESTABLISHED;
+            tcp_send_raw(s, TCP_ACK, 0, 0);
+            return;
+        }
+        if (s->state==TCP_ESTABLISHED) {
+            uint8_t doff = (uint8_t)((tcp->data_offset>>4)*4);
+            uint16_t data_len = (uint16_t)(len - 14 - 20 - doff);
+            if (data_len>0) {
+                uint8_t *data = frame+14+20+doff;
+                s->ack = seq + data_len;
+                for (uint16_t j=0;j<data_len;j++) {
+                    s->rbuf[s->rbuf_head] = data[j];
+                    s->rbuf_head=(s->rbuf_head+1)%TCP_BUF_SIZE;
+                }
+                tcp_send_raw(s, TCP_ACK, 0, 0);
+            }
+            if (tcp->flags&TCP_FIN) {
+                s->ack++;
+                tcp_send_raw(s, TCP_ACK, 0, 0);
+                s->state=TCP_CLOSE_WAIT;
+                tcp_send_raw(s, TCP_FIN|TCP_ACK, 0, 0);
+                s->state=TCP_LAST_ACK;
+            }
+        }
+        return;
+    }
 }

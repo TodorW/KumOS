@@ -28,6 +28,11 @@ typedef struct {
     uint32_t     ticks;
     uint32_t     sleep_until;
     int          kum_level;
+    uint32_t     page_dir_phys;
+    char         cwd[128];
+    char        *argv[16];
+    int          argc;
+    uint32_t     brk;
 } task_t;
 
 void    sched_init(void);

@@ -442,3 +442,80 @@ static char *strtok(char *str, const char *delim) {
     return strtok_r(str, delim, &saved);
 }
 
+
+static char *strstr(const char *hay, const char *needle) {
+    if (!*needle) return (char*)hay;
+    for (; *hay; hay++) {
+        const char *h=hay, *n=needle;
+        while (*h && *n && *h==*n){h++;n++;}
+        if (!*n) return (char*)hay;
+    }
+    return 0;
+}
+
+static int sscanf(const char *str, const char *fmt, ...) {
+    __builtin_va_list ap; __builtin_va_start(ap,fmt);
+    int count=0;
+    while(*fmt&&*str){
+        if(*fmt=='%'){
+            fmt++;
+            if(*fmt=='d'||*fmt=='i'){
+                while(*str==' ')str++;
+                int neg=0,n=0;
+                if(*str=='-'){neg=1;str++;}
+                while(*str>='0'&&*str<='9'){n=n*10+(*str-'0');str++;}
+                *__builtin_va_arg(ap,int*)=neg?-n:n; count++;
+            } else if(*fmt=='s'){
+                char*out=__builtin_va_arg(ap,char*);
+                while(*str&&*str!=' ')(*out++=*str++);
+                *out=0; count++;
+            } else if(*fmt=='u'){
+                while(*str==' ')str++;
+                unsigned n=0;
+                while(*str>='0'&&*str<='9'){n=n*10+(unsigned)(*str-'0');str++;}
+                *__builtin_va_arg(ap,unsigned*)=n; count++;
+            }
+            fmt++;
+        } else if(*fmt==*str){fmt++;str++;}
+        else break;
+    }
+    __builtin_va_end(ap);
+    return count;
+}
+
+static inline int sys_exec(const char *path) {
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(19),"b"(path)); return r;
+}
+
+#ifndef STDIN_FILENO
+#define STDIN_FILENO   0
+#define STDOUT_FILENO  1
+#define STDERR_FILENO  2
+#endif
+
+static inline void *memmove(void *dst, const void *src, size_t n) {
+    uint8_t *d=(uint8_t*)dst; const uint8_t *s=(const uint8_t*)src;
+    if(d<s||d>=s+n) { while(n--)*d++=*s++; }
+    else { d+=n; s+=n; while(n--)*--d=*--s; }
+    return dst;
+}
+
+static inline char *strncat(char *dst, const char *src, size_t n) {
+    char *r=dst; while(*dst)dst++;
+    while(n--&&(*dst++=*src++));
+    *dst=0; return r;
+}
+
+#define kmemset  memset
+#define kmemcpy  memcpy
+
+
+static inline int execve(const char *path, char *const argv[]) {
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(44),"b"(path),"c"(argv)); return r;
+}
+static inline int select_fd(int nfds, uint32_t *rfds) {
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(45),"b"(nfds),"c"(rfds)); return r;
+}
+static inline int poll_fd(int *fds, int nfds) {
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(46),"b"(fds),"c"(nfds)); return r;
+}

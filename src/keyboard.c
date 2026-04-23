@@ -205,3 +205,4 @@ int keyboard_getline(char *out, int maxlen) {
 
 int keyboard_ctrl_held(void) { return ctrl; }
 int keyboard_alt_held(void)  { return 0;   }
+int keyboard_has_input(void) { return bhead != btail; }

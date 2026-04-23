@@ -3,6 +3,7 @@
 #include "idt.h"
 #include "vga.h"
 #include "kstring.h"
+#include "swap.h"
 #include <stdint.h>
 
 #define PMM_MAX_FRAMES  65536
@@ -366,6 +367,16 @@ static void page_fault_handler(registers_t *r) {
         }
     }
 
+    if (!present) {
+        uint32_t page = fault_addr & ~0xFFF;
+        if (swap_is_swapped(page)) {
+            if (swap_in(page) == 0) {
+                fault_count++;
+                return;
+            }
+        }
+    }
+
     vga_fill_rect(0,0,80,1,' ',VGA_WHITE,VGA_RED);
     vga_puts_at("PAGE FAULT  CR2=", 0, 0, VGA_YELLOW, VGA_RED);
     char buf[12]; kitoa(fault_addr, buf, 16);
@@ -385,3 +396,63 @@ void demand_paging_init(void) {
 
 uint32_t demand_fault_count(void) { return fault_count; }
 uint32_t demand_cow_count(void)   { return cow_count;   }
+uint32_t paging_current_dir(void) {
+    uint32_t cr3;
+    __asm__ volatile("mov %%cr3,%0":"=r"(cr3));
+    return cr3;
+}
+
+void paging_switch(uint32_t dir_phys) {
+    load_cr3(dir_phys);
+}
+
+uint32_t paging_clone_dir(void) {
+    uint32_t new_dir_phys = pmm_alloc();
+    if (!new_dir_phys) return 0;
+    uint32_t *new_dir = (uint32_t *)new_dir_phys;
+    kmemset(new_dir, 0, PAGE_SIZE);
+
+    for (int i = 0; i < PAGE_ENTRIES; i++) {
+        if (!page_dir[i]) continue;
+        if (i < 256) {
+            new_dir[i] = page_dir[i];
+        } else {
+            uint32_t tbl_phys = page_dir[i] & ~0xFFF;
+            uint32_t *src_tbl = (uint32_t *)tbl_phys;
+            uint32_t new_tbl_phys = pmm_alloc();
+            if (!new_tbl_phys) { pmm_free(new_dir_phys); return 0; }
+            uint32_t *new_tbl = (uint32_t *)new_tbl_phys;
+            kmemset(new_tbl, 0, PAGE_SIZE);
+            for (int j = 0; j < PAGE_ENTRIES; j++) {
+                if (!src_tbl[j]) continue;
+                uint32_t phys = src_tbl[j] & ~0xFFF;
+                uint32_t flags = src_tbl[j] & 0xFFF;
+                uint32_t new_phys = pmm_alloc();
+                if (!new_phys) continue;
+                kmemcpy((void *)new_phys, (void *)phys, PAGE_SIZE);
+                new_tbl[j] = new_phys | flags;
+            }
+            new_dir[i] = new_tbl_phys | (page_dir[i] & 0xFFF);
+        }
+    }
+    return new_dir_phys;
+}
+
+void paging_free_user(uint32_t dir_phys) {
+    uint32_t *dir = (uint32_t *)dir_phys;
+    for (int i = 256; i < PAGE_ENTRIES; i++) {
+        if (!dir[i]) continue;
+        uint32_t tbl_phys = dir[i] & ~0xFFF;
+        uint32_t *tbl = (uint32_t *)tbl_phys;
+        for (int j = 0; j < PAGE_ENTRIES; j++) {
+            if (tbl[j]) pmm_free(tbl[j] & ~0xFFF);
+        }
+        pmm_free(tbl_phys);
+    }
+    pmm_free(dir_phys);
+}
+
+void paging_copy_user_range(uint32_t src_dir, uint32_t dst_dir,
+                             uint32_t start, uint32_t end) {
+    (void)src_dir; (void)dst_dir; (void)start; (void)end;
+}

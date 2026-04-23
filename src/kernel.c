@@ -26,6 +26,12 @@
 #include "net.h"
 #include "signal.h"
 #include "procfs.h"
+#include "users.h"
+#include "dns.h"
+#include "dmesg.h"
+#include "dhcp.h"
+#include "ext2.h"
+#include "swap.h"
 
 #define MULTIBOOT_MAGIC  0x2BADB002
 #define MULTIBOOT_FLAG_MEM (1<<0)
@@ -569,7 +575,26 @@ static void dispatch(const char *line) {
     else if(kstrcmp(cmd,"clear")==0){ vga_clear(); draw_statusbar(); }
     else if(kstrcmp(cmd,"logo")==0){ cmd_logo(); }
     else if(kstrcmp(cmd,"uname")==0){ vga_puts("KumOS 1.4 kumos i686 KumOS/KumLabs\n"); }
-    else if(kstrcmp(cmd,"whoami")==0){ vga_puts(kum_active?"root (kum)\n":"user\n"); }
+    else if(kstrcmp(cmd,"whoami")==0) {
+        user_t *u = users_get_current();
+        kprintf("%s (uid=%u)\n", u->name, u->uid);
+    }
+    else if(kstrcmp(cmd,"users")==0) { users_list(); }
+    else if(kstrcmp(cmd,"login")==0) {
+        char uname[32], upass[32];
+        vga_puts("Username: "); keyboard_getline(uname, 32);
+        vga_puts("Password: "); keyboard_getline(upass, 32);
+        int uid = users_login(uname, upass);
+        if (uid >= 0) {
+            vga_set_color(VGA_GREEN,VGA_BLACK);
+            kprintf("Welcome, %s!\n", uname);
+            vga_set_color(VGA_WHITE,VGA_BLACK);
+        } else {
+            vga_set_color(VGA_RED,VGA_BLACK);
+            vga_puts("Login failed.\n");
+            vga_set_color(VGA_WHITE,VGA_BLACK);
+        }
+    }
     else if(kstrcmp(cmd,"date")==0) {
         vga_puts("  ");
         rtc_print();
@@ -631,11 +656,53 @@ static void dispatch(const char *line) {
     else if(kstrcmp(cmd,"ps")==0){ vga_putchar('\n'); sched_list(); vga_putchar('\n'); }
     else if(kstrcmp(cmd,"meminfo")==0){ cmd_meminfo(); }
     else if(kstrcmp(cmd,"vmem")==0){ cmd_vmem(); }
+    else if(kstrcmp(cmd,"swapinfo")==0) {
+        kprintf("\n  Swap: %u/%u slots used (%uKB/%uKB)\n\n",
+                swap_used_slots(), (uint32_t)256,
+                swap_used_slots()*4, (uint32_t)256*4);
+    }
     else if(kstrcmp(cmd,"mmap")==0){ cmd_mmap(rest); }
     else if(kstrcmp(cmd,"cpuinfo")==0){ cmd_cpuinfo(); }
     else if(kstrcmp(cmd,"irqinfo")==0){ cmd_irqinfo(); }
     else if(kstrcmp(cmd,"ifconfig")==0) {
         net_print_info();
+    }
+    else if(kstrcmp(cmd,"dmesg")==0) {
+        vga_putchar('\n');
+        dmesg_print_all();
+        vga_putchar('\n');
+    }
+    else if(kstrcmp(cmd,"dhcp")==0) {
+        if (!net_ready()) { vga_puts("No NIC.\n"); }
+        else {
+            vga_puts("Sending DHCP DISCOVER...\n");
+            if (dhcp_request() == 0) {
+                uint32_t ip = dhcp_get_ip();
+                uint32_t gw = dhcp_get_gateway();
+                kprintf("  IP:  %u.%u.%u.%u\n",(ip>>24)&0xFF,(ip>>16)&0xFF,(ip>>8)&0xFF,ip&0xFF);
+                kprintf("  GW:  %u.%u.%u.%u\n",(gw>>24)&0xFF,(gw>>16)&0xFF,(gw>>8)&0xFF,gw&0xFF);
+                dns_init(dhcp_get_dns() ? dhcp_get_dns() : NET_IP(8,8,8,8));
+                vga_puts("  DNS updated.\n");
+            } else {
+                vga_puts("  DHCP failed.\n");
+            }
+        }
+    }
+    else if(kstrcmp(cmd,"dns")==0) {
+        if (!*rest) { vga_puts("Usage: dns <hostname>\n"); }
+        else {
+            if (!net_ready()) { vga_puts("No NIC.\n"); }
+            else {
+                kprintf("Resolving '%s'...\n", rest);
+                uint32_t ip = dns_resolve(rest);
+                if (ip) {
+                    kprintf("  %s = %u.%u.%u.%u\n", rest,
+                        (ip>>24)&0xFF,(ip>>16)&0xFF,(ip>>8)&0xFF,ip&0xFF);
+                } else {
+                    vga_puts("  Resolution failed.\n");
+                }
+            }
+        }
     }
     else if(kstrcmp(cmd,"ping")==0) {
         if (!net_ready()) { vga_puts("No NIC.\n"); }
@@ -889,6 +956,8 @@ static void dispatch(const char *line) {
 void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
 
     vga_init();
+    dmesg_init();
+    dmesg_log("KumOS v1.9 booting");
 
     serial_init(COM1);
     serial_puts(COM1, "\r\n\r\n");
@@ -942,6 +1011,9 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
     signal_init();
     serial_printf("[boot] Signal subsystem ready\r\n");
 
+    users_init();
+    serial_printf("[boot] User accounts ready (root/user/guest)\r\n");
+
     sched_init();
     serial_printf("[boot] Scheduler ready\r\n");
 
@@ -953,10 +1025,30 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
     serial_printf("[boot] RTC ready  Mouse: %s\r\n",
                   mouse_ready() ? "detected" : "not found");
 
-    if (net_init() == 0)
+    if (net_init() == 0) {
         serial_printf("[boot] RTL8139 NIC ready  IP: 10.0.2.15\r\n");
-    else
+        dmesg_log("net: RTL8139 ready, IP 10.0.2.15");
+        dns_init(NET_IP(8,8,8,8));
+        dmesg_log("dns: resolver ready (8.8.8.8)");
+        if (dhcp_request() == 0) {
+            serial_printf("[boot] DHCP: IP obtained\r\n");
+            dmesg_log("dhcp: IP obtained");
+            dns_init(dhcp_get_dns() ? dhcp_get_dns() : NET_IP(8,8,8,8));
+        }
+    } else {
         serial_printf("[boot] No NIC found\r\n");
+        dmesg_log("net: no NIC found");
+    }
+
+    if (ext2_init(2048) == 0) {
+        vfs_mount("/ext2", &ext2_vfs_ops);
+        serial_printf("[boot] EXT2 mounted at /ext2\r\n");
+        dmesg_log("ext2: mounted at /ext2");
+    }
+
+    if (swap_init() == 0) {
+        dmesg_log("swap: ready");
+    }
 
     serial_printf("[boot] Enabling interrupts...\r\n");
     __asm__ volatile ("sti");

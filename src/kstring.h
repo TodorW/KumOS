@@ -15,4 +15,8 @@ void  *kmemcpy(void *dst, const void *src, size_t n);
 int    kstartswith(const char *s, const char *prefix);
 void   kitoa(uint32_t val, char *buf, int base);
 
+char  *kstrchr(const char *s, int c);
+char  *kstrrchr(const char *s, int c);
+int    kstrncpy_safe(char *dst, const char *src, size_t n);
+
 #endif

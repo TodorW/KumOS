@@ -54,3 +54,9 @@ void     vmfree(void *ptr);
 int      vmalloc_copy_on_write(uint32_t virt);
 
 #endif
+uint32_t paging_clone_dir(void);
+void     paging_switch(uint32_t page_dir_phys);
+void     paging_free_user(uint32_t page_dir_phys);
+uint32_t paging_current_dir(void);
+void     paging_copy_user_range(uint32_t src_dir, uint32_t dst_dir,
+                                uint32_t start, uint32_t end);

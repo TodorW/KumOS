@@ -68,3 +68,9 @@ void net_print_info(void);
 #define NET_HTONL(x)     (((x)>>24)|(((x)>>8)&0xFF00)|(((x)<<8)&0xFF0000)|((x)<<24))
 
 #endif
+
+int  tcp_connect(uint32_t dst_ip, uint16_t dst_port);
+int  tcp_send(int sock, const void *data, uint16_t len);
+int  tcp_recv(int sock, void *buf, uint16_t len);
+void tcp_close(int sock);
+void tcp_process(uint8_t *frame, uint16_t len);

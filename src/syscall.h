@@ -35,7 +35,14 @@
 #define SYS_ISATTY   29
 #define SYS_KILL     30
 #define SYS_SIGNAL   31
-#define SYSCALL_MAX  32
+#define SYS_TCP_CONNECT 40
+#define SYS_TCP_SEND    41
+#define SYS_TCP_RECV    42
+#define SYS_TCP_CLOSE   43
+#define SYS_EXECVE   44
+#define SYS_SELECT   45
+#define SYS_POLL     46
+#define SYSCALL_MAX  47
 
 void syscall_init(void);
 

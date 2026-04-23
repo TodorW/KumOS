@@ -6,8 +6,8 @@ ASM      = nasm
 ASMFLAGS = -f elf32
 LD       = ld
 LDFLAGS  = -m elf_i386 -T linker.ld
-UFLAGS   = -m32 -nostdlib -nostartfiles -static -O2 -fno-stack-protector -fno-builtin \
-           -Wl,--build-id=none -Wl,-z,norelro -Iuser
+UFLAGS   = -m32 -nostdlib -nostartfiles -static -O2 -fno-stack-protector \
+           -fno-builtin -Wl,--build-id=none -Wl,-z,norelro -Iuser
 GRUB_MKR = $(shell command -v grub2-mkrescue 2>/dev/null || command -v grub-mkrescue 2>/dev/null)
 
 KERN_OBJS = \
@@ -16,9 +16,16 @@ KERN_OBJS = \
     src/process.o src/fs.o src/gdt.o src/idt.o \
     src/timer.o src/sched.o src/paging.o \
     src/ata.o src/fat12.o src/pipe.o src/vfs.o \
-    src/signal.o src/net.o src/procfs.o \
+    src/signal.o src/net.o src/procfs.o src/users.o \
+    src/dns.o src/dmesg.o src/dhcp.o src/ext2.o src/swap.o \
     src/syscall.o src/userspace.o src/elf.o \
     src/serial.o src/rtc.o src/mouse.o src/gui.o src/kernel.o
+
+USER_PROGS = \
+    user/hello.elf user/counter.elf user/cat.elf user/sysinfo.elf \
+    user/kush.elf user/ed.elf user/vi.elf user/top.elf \
+    user/crond.elf user/http.elf user/grep.elf user/tar.elf \
+    user/wc.elf user/sort.elf user/uniq.elf user/awk.elf
 
 all: kumos.bin
 boot/%.o: boot/%.asm
@@ -26,12 +33,12 @@ boot/%.o: boot/%.asm
 src/%.o: src/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 kumos.bin: $(KERN_OBJS)
-	@$(LD) $(LDFLAGS) -o $@ $(KERN_OBJS)
+	@$(LD) $(LDFLAGS) -o $@ $(KERN_OBJS) 2>&1 | grep -v deprecated
 	@echo "Kernel: $$(ls -lh $@ | awk '{print $$5}')"
 user/%.elf: user/%.c
 	@$(CC) $(UFLAGS) -Ttext=0x400000 -o $@ $<
 	@strip $@
-user-programs: user/hello.elf user/counter.elf user/cat.elf user/sysinfo.elf user/kush.elf
+user-programs: $(USER_PROGS)
 iso: kumos.bin
 	@mkdir -p iso/boot/grub
 	@cp kumos.bin iso/boot/kumos.bin && cp grub.cfg iso/boot/grub/grub.cfg

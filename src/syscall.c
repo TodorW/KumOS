@@ -277,59 +277,161 @@ static uint32_t sc_getppid(uint32_t a, uint32_t b, uint32_t c) {
     return (uint32_t)t->parent_pid;
 }
 
-static uint32_t sc_exec(uint32_t path_addr, uint32_t b, uint32_t c) {
-    (void)b;(void)c;
+static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_addr) {
+    (void)envp_addr;
     if (!path_addr) return (uint32_t)-1;
     const char *path = (const char *)path_addr;
 
     char upper[64]; int i=0;
     while(path[i]&&i<63){char ch=path[i];if(ch>='a'&&ch<='z')ch-=32;upper[i++]=ch;}
     upper[i]=0;
+    if(!kstrchr(upper,'.')) { kstrcat(upper,".ELF"); }
 
     elf_load_result_t r = elf_load_disk(upper);
     if (r.error != 0) return (uint32_t)-1;
 
-    int pid = elf_spawn(upper, &r);
-    if (pid < 0) return (uint32_t)-1;
+    task_t *cur = sched_current();
 
-    return (uint32_t)sched_waitpid(pid);
+    if (cur->page_dir_phys) {
+        paging_free_user(cur->page_dir_phys);
+        cur->page_dir_phys = 0;
+    }
+
+    uint32_t new_dir = paging_clone_dir();
+    if (!new_dir) return (uint32_t)-1;
+    cur->page_dir_phys = new_dir;
+    paging_switch(new_dir);
+
+    elf_load_result_t r2 = elf_load_disk(upper);
+    if (r2.error != 0) { paging_switch(0); return (uint32_t)-1; }
+
+    kstrcpy(cur->name, upper);
+    cur->argc = 0;
+    if (argv_addr) {
+        char **argv = (char **)argv_addr;
+        while (argv[cur->argc] && cur->argc < 15) {
+            cur->argv[cur->argc] = argv[cur->argc];
+            cur->argc++;
+        }
+    }
+    cur->argv[cur->argc] = 0;
+
+    uint32_t user_stack_top = 0x40000000;
+    uint32_t user_esp       = user_stack_top - 4;
+
+    for (uint32_t va = user_stack_top - 16384; va < user_stack_top; va += PAGE_SIZE) {
+        if (!paging_is_mapped(va)) {
+            uint32_t phys = pmm_alloc();
+            if (phys) { kmemset((void*)phys,0,PAGE_SIZE); paging_map(va,phys,PAGE_WRITE|PAGE_USER); }
+        }
+    }
+
+    uint32_t *sp = (uint32_t *)(uintptr_t)user_esp;
+    uint32_t *ksp = (uint32_t *)((uint8_t *)cur->stack + cur->stack_size);
+
+    *--ksp = 0x23;
+    *--ksp = user_esp;
+    *--ksp = 0x202;
+    *--ksp = 0x1B;
+    *--ksp = r2.entry;
+    for(int j=0;j<8;j++) *--ksp = 0;
+    *--ksp = 0x23;
+    *--ksp = 0; *--ksp = 0;
+
+    cur->esp = (uint32_t)(uintptr_t)ksp;
+    (void)sp;
+    return 0;
+}
+
+static uint32_t sc_exec(uint32_t path_addr, uint32_t b, uint32_t c) {
+    return sc_execve(path_addr, b, c);
 }
 
 static uint32_t sc_fork(uint32_t a, uint32_t b, uint32_t c) {
     (void)a;(void)b;(void)c;
-
     task_t *parent = sched_current();
 
-    uint32_t *child_stack = kmalloc(SCHED_STACK_SIZE);
-    if (!child_stack) return (uint32_t)-1;
+    uint32_t child_dir = paging_clone_dir();
+    if (!child_dir) return (uint32_t)-1;
 
-    int slot = -1;
-    for (int i = 0; i < SCHED_MAX_TASKS; i++) {
-        task_t *t = sched_get_task(i+1);
-        if (!t || t->state == TASK_DEAD || t->state == TASK_ZOMBIE) {
-            slot = i; break;
-        }
+    uint32_t *child_kstack = kmalloc(SCHED_STACK_SIZE);
+    if (!child_kstack) { paging_free_user(child_dir); return (uint32_t)-1; }
+
+    int child_pid = sched_spawn(parent->name, 0, parent->kum_level);
+    if (child_pid < 0) {
+        kfree(child_kstack);
+        paging_free_user(child_dir);
+        return (uint32_t)-1;
     }
-    if (slot < 0) { kfree(child_stack); return (uint32_t)-1; }
-
-    extern int next_pid_peek(void);
-    int child_pid = sched_spawn("fork-child", 0, parent->kum_level);
-    if (child_pid < 0) { kfree(child_stack); return (uint32_t)-1; }
 
     task_t *child = sched_get_task(child_pid);
     if (!child) return (uint32_t)-1;
 
-    child->parent_pid = parent->pid;
+    child->parent_pid    = parent->pid;
+    child->page_dir_phys = child_dir;
+    kstrcpy(child->cwd,   parent->cwd);
+    child->argc          = parent->argc;
+    for(int j=0;j<parent->argc&&j<15;j++) child->argv[j]=parent->argv[j];
 
-    for (uint32_t va = 0x400000; va < 0x40000000; va += PAGE_SIZE) {
-        if (paging_is_mapped(va)) {
-            vmalloc_copy_on_write(va);
-        }
-    }
+    if (child->stack) kfree(child->stack);
+    child->stack      = child_kstack;
+    child->stack_size = SCHED_STACK_SIZE;
+
+    uint32_t *sp = (uint32_t *)((uint8_t *)child_kstack + SCHED_STACK_SIZE);
+    *--sp = 0x23;
+    *--sp = parent->esp;
+    *--sp = 0x202;
+    *--sp = 0x1B;
+    *--sp = 0;
+    for(int j=0;j<8;j++) *--sp=0;
+    *--sp = 0x23;
+    *--sp = 0; *--sp = 0;
+    child->esp = (uint32_t)(uintptr_t)sp;
 
     return (uint32_t)child_pid;
 }
 
+static uint32_t sc_tcp_connect(uint32_t ip, uint32_t port, uint32_t x) {
+    (void)x; return (uint32_t)tcp_connect(ip,(uint16_t)port);
+}
+static uint32_t sc_tcp_send(uint32_t s, uint32_t buf, uint32_t len) {
+    return (uint32_t)tcp_send((int)s,(const void*)buf,(uint16_t)len);
+}
+static uint32_t sc_tcp_recv(uint32_t s, uint32_t buf, uint32_t len) {
+    return (uint32_t)tcp_recv((int)s,(void*)buf,(uint16_t)len);
+}
+static uint32_t sc_tcp_close(uint32_t s, uint32_t b, uint32_t x) {
+    (void)b;(void)x; tcp_close((int)s); return 0;
+}
+
+static uint32_t sc_select(uint32_t nfds, uint32_t rfds_addr, uint32_t wfds_addr) {
+    uint32_t timeout_ms = 5000;
+    uint32_t deadline = timer_ticks() + timeout_ms / 10;
+    int ready = 0;
+
+    while (timer_ticks() < deadline) {
+        for (uint32_t fd = 0; fd < nfds && fd < 32; fd++) {
+            if (rfds_addr && (*(uint32_t*)rfds_addr & (1u<<fd))) {
+                vfs_fd_t *f = vfs_get_fd((int)fd);
+                if (!f) continue;
+                if (f->type == VFS_PIPE && pipe_has_data(f->pipe_id)) {
+                    ready++; continue;
+                }
+                if (f->type == VFS_DEV && f->fd_data == 0) {
+                    if (keyboard_has_input()) ready++;
+                }
+            }
+        }
+        if (ready) break;
+        sched_yield();
+    }
+    return (uint32_t)ready;
+}
+
+static uint32_t sc_poll(uint32_t fds_addr, uint32_t nfds, uint32_t timeout_ms) {
+    return sc_select(nfds, fds_addr, 0);
+    (void)timeout_ms;
+}
 typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t);
 
 static syscall_fn syscall_table[SYSCALL_MAX] = {
@@ -364,6 +466,13 @@ static syscall_fn syscall_table[SYSCALL_MAX] = {
     [SYS_ISATTY]  = sc_isatty,
     [SYS_KILL]    = sc_kill,
     [SYS_SIGNAL]  = sc_signal_set,
+    [SYS_TCP_CONNECT] = sc_tcp_connect,
+    [SYS_TCP_SEND]    = sc_tcp_send,
+    [SYS_TCP_RECV]    = sc_tcp_recv,
+    [SYS_TCP_CLOSE]   = sc_tcp_close,
+    [SYS_EXECVE]      = sc_execve,
+    [SYS_SELECT]      = sc_select,
+    [SYS_POLL]        = sc_poll,
 };
 
 uint32_t syscall_dispatch(uint32_t num, uint32_t a, uint32_t b, uint32_t c) {

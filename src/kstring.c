@@ -68,3 +68,15 @@ void kitoa(uint32_t val, char *buf, int base) {
     for (int j = 0; j < i; j++) buf[j] = tmp[i-1-j];
     buf[i] = 0;
 }
+char *kstrchr(const char *s, int c) {
+    while(*s){ if(*s==(char)c) return (char*)s; s++; }
+    return (c==0)?(char*)s:0;
+}
+char *kstrrchr(const char *s, int c) {
+    const char *last=0;
+    while(*s){ if(*s==(char)c) last=s; s++; }
+    return (char*)last;
+}
+int kstrncpy_safe(char *dst, const char *src, size_t n) {
+    size_t i=0; while(i<n-1&&src[i]){dst[i]=src[i];i++;} dst[i]=0; return (int)i;
+}

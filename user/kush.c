@@ -1,9 +1,6 @@
 
 #include "kumos_libc.h"
 
-static inline int sys_exec(const char *path) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(19),"b"(path)); return r;
-}
 static inline int sys_pipe(int fds[2]) {
     int r; __asm__ volatile("int $0x80":"=a"(r):"a"(21),"b"(fds)); return r;
 }
@@ -239,6 +236,7 @@ static int do_exec(const char *cmd) {
     return r;
 }
 
+static int run_script(const char *filename);
 static int run_pipeline(char *line) {
 
     char *parts[8]; int nparts = 0;
@@ -255,6 +253,10 @@ static int run_pipeline(char *line) {
         if (!argc) return 0;
         const char *cmd = argv[0];
         if (!strcmp(cmd,"exit")){exit(argc>1?atoi(argv[1]):0);}
+        if (!strcmp(cmd,"source")||!strcmp(cmd,".")) {
+            if(argc>1) return run_script(argv[1]);
+            puts("source: need filename"); return 1;
+        }
         if (!strcmp(cmd,"help"))    return do_help(argv,argc);
         if (!strcmp(cmd,"ls"))      return do_ls(argv,argc);
         if (!strcmp(cmd,"cat"))     return do_cat(argv,argc);
@@ -331,6 +333,28 @@ static void motd(void) {
     fputs("  ██║  ██╗╚██████╔╝███████║██║  ██║\n");
     fputs("  ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝\n");
     printf("\n  kush v%s — KumOS Shell  (type 'help')\n\n", KUSH_VER);
+}
+
+static int run_script(const char *filename) {
+    int fd = open(filename);
+    if (fd < 0) { printf("kush: %s: not found\n", filename); return 1; }
+    char buf[4096]; int n = fread(fd, buf, sizeof(buf)-1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = 0;
+
+    char *p = buf; int ret = 0;
+    while (*p) {
+        char *nl = strchr(p, '\n');
+        if (nl) *nl = 0;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p && *p != '#') {
+            char line[256]; strncpy(line, p, 255);
+            ret = run_pipeline(line);
+        }
+        p = nl ? nl+1 : p+strlen(p);
+    }
+    return ret;
 }
 
 int main(void) {

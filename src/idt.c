@@ -153,6 +153,23 @@ static void draw_panic(registers_t *r) {
                     32, 13, VGA_YELLOW, VGA_RED);
     }
 
+    vga_puts_at("--- Stack Trace ---", 30, 15, VGA_WHITE, VGA_RED);
+    uint32_t *ebp = (uint32_t *)r->ebp;
+    int frame = 0;
+    int row = 16;
+    while (ebp && frame < 5 && row < 21) {
+        uint32_t ret = *(ebp + 1);
+        if (ret < 0x100000 || ret > 0x800000) break;
+        vga_puts_at("#", 5, row, VGA_WHITE, VGA_RED);
+        kitoa(frame, buf, 10);
+        vga_puts_at(buf, 7, row, VGA_WHITE, VGA_RED);
+        vga_puts_at(" EIP=0x", 9, row, VGA_WHITE, VGA_RED);
+        kitoa(ret, buf, 16);
+        vga_puts_at(buf, 16, row, VGA_YELLOW, VGA_RED);
+        ebp = (uint32_t *)*ebp;
+        frame++; row++;
+    }
+
     vga_puts_at("System halted. Reset to continue.", 23, 22, VGA_WHITE, VGA_RED);
     vga_puts_at("KumOS v1.1 | KumLabs", 30, 23, VGA_LIGHT_GREY, VGA_RED);
 

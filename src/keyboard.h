@@ -10,4 +10,6 @@ int  keyboard_getline(char *buf, int maxlen);
 int  keyboard_ctrl_held(void);
 int  keyboard_alt_held(void);
 
+int keyboard_has_input(void);
+
 #endif
