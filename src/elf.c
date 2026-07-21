@@ -48,7 +48,8 @@ elf_load_result_t elf_load_mem(const void *buf, uint32_t bufsz) {
         if (ph->vaddr < 0x100000) continue;
         if (ph->vaddr >= 0xC0000000) continue;
 
-        if (ph->vaddr >= 0x100000 && ph->vaddr < 0x500000) {
+        extern uint8_t _kernel_end[];
+        if (ph->vaddr >= KERN_BASE && ph->vaddr < (uint32_t)_kernel_end) {
             res.error = -2; return res;
         }
 
@@ -61,6 +62,12 @@ elf_load_result_t elf_load_mem(const void *buf, uint32_t bufsz) {
                 uint32_t phys = pmm_alloc();
                 if (!phys) { res.error = -3; return res; }
                 kmemset((void *)phys, 0, PAGE_SIZE);
+                paging_map(va, phys, flags);
+            } else {
+                /* Already mapped (e.g. inside the boot-time identity range) —
+                   the existing mapping is supervisor-only, so re-map the same
+                   physical frame with PAGE_USER for this ring-3 segment. */
+                uint32_t phys = paging_virt_to_phys(va) & ~0xFFF;
                 paging_map(va, phys, flags);
             }
         }
@@ -133,6 +140,8 @@ int elf_spawn(const char *name, elf_load_result_t *res) {
 
     uint32_t user_esp = stack_top - 4;
 
+    extern void user_entry_trampoline(void);
+
     *--sp = USER_DS;
     *--sp = user_esp;
     *--sp = 0x202;
@@ -143,6 +152,10 @@ int elf_spawn(const char *name, elf_load_result_t *res) {
 
     *--sp = USER_DS;
 
+    *--sp = (uint32_t)user_entry_trampoline;
+
+    *--sp = 0;
+    *--sp = 0;
     *--sp = 0;
     *--sp = 0;
 

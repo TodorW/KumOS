@@ -102,7 +102,7 @@ static uint32_t *pte_ptr(uint32_t virt, int alloc) {
         uint32_t phys = pmm_alloc();
         if (!phys) return 0;
         kmemset((void *)phys, 0, PAGE_SIZE);
-        page_dir[di] = phys | PAGE_PRESENT | PAGE_WRITE;
+        page_dir[di] = phys | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
     }
 
     uint32_t *tbl = (uint32_t *)(page_dir[di] & ~0xFFF);
@@ -169,7 +169,7 @@ void paging_init(uint32_t mem_kb) {
             uint32_t phys = (uint32_t)(t * PAGE_ENTRIES + p) * PAGE_SIZE;
             kern_tables[t][p] = phys | PAGE_PRESENT | PAGE_WRITE;
         }
-        page_dir[t] = (uint32_t)kern_tables[t] | PAGE_PRESENT | PAGE_WRITE;
+        page_dir[t] = (uint32_t)kern_tables[t] | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
     }
 
     load_cr3((uint32_t)page_dir);
@@ -382,6 +382,8 @@ static void page_fault_handler(registers_t *r) {
     char buf[12]; kitoa(fault_addr, buf, 16);
     vga_puts_at(buf, 17, 0, VGA_WHITE, VGA_RED);
     vga_puts_at(write ? " WRITE" : " READ", 28, 0, VGA_WHITE, VGA_RED);
+    vga_puts_at(present ? "PRESENT" : "NOTPRES", 36, 0, VGA_WHITE, VGA_RED);
+    vga_puts_at((r->err_code & 4) ? "USER" : "SUPER", 45, 0, VGA_WHITE, VGA_RED);
 
     exc_register(14, 0);
 

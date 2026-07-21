@@ -32,6 +32,7 @@
 #include "dhcp.h"
 #include "ext2.h"
 #include "swap.h"
+#include "pkg.h"
 
 #define MULTIBOOT_MAGIC  0x2BADB002
 #define MULTIBOOT_FLAG_MEM (1<<0)
@@ -74,22 +75,59 @@ static void kprintf(const char *fmt, ...) {
     __builtin_va_end(ap);
 }
 
-static void draw_statusbar(void) {
-    vga_fill_rect(0,0,80,1,' ',VGA_BLACK,VGA_CYAN);
-    vga_puts_at(" KumOS v1.1",0,0,VGA_BLACK,VGA_CYAN);
+static void zpad2(uint32_t v, char *out) {
+    out[0] = '0' + ((v/10)%10);
+    out[1] = '0' + (v%10);
+    out[2] = 0;
+}
 
-    char ubuf[20]="UP:"; char num[12];
-    kitoa(timer_seconds(),num,10); kstrcat(ubuf,num); kstrcat(ubuf,"s");
-    vga_puts_at(ubuf,28,0,VGA_BLACK,VGA_CYAN);
+static void statusbar_seg(int *x, const char *text, vga_color fg) {
+    vga_puts_at(text, *x, 0, fg, VGA_BLUE);
+    *x += (int)kstrlen(text);
+    char sep[2] = { (char)VGA_CH_VLINE, 0 };
+    vga_puts_at(sep, *x, 0, VGA_LIGHT_BLUE, VGA_BLUE);
+    *x += 2;
+}
+
+static void draw_statusbar(void) {
+    vga_fill_rect(0,0,80,1,' ',VGA_WHITE,VGA_BLUE);
+
+    /* fade-in accent on the far left, powerline-style */
+    vga_puts_at("\xB0",0,0,VGA_BLUE,VGA_BLACK);
+    vga_puts_at("\xB1",1,0,VGA_BLUE,VGA_BLACK);
+    vga_puts_at("\xB2",2,0,VGA_BLUE,VGA_BLACK);
+
+    int x = 4;
+    statusbar_seg(&x, " KumOS ", VGA_WHITE);
+
+    uint32_t secs = timer_seconds();
+    char ubuf[20] = " up ", num[12];
+    kitoa(secs/3600, num, 10); kstrcat(ubuf, num); kstrcat(ubuf, "h");
+    char mm[3]; zpad2((secs/60)%60, mm); kstrcat(ubuf, mm); kstrcat(ubuf, "m ");
+    statusbar_seg(&x, ubuf, VGA_LIGHT_GREEN);
 
     task_t *t = sched_current();
-    char tbuf[40]="["; kstrcat(tbuf,t->name); kstrcat(tbuf,"]");
-    vga_puts_at(tbuf,44,0,VGA_BLACK,VGA_CYAN);
+    char tbuf[40] = " "; kstrcat(tbuf, t->name); kstrcat(tbuf, " ");
+    statusbar_seg(&x, tbuf, VGA_LIGHT_CYAN);
 
-    vga_puts_at("MEM:",60,0,VGA_BLACK,VGA_CYAN);
-    char mb[10]; kitoa(kmalloc_used()/1024,mb,10); kstrcat(mb,"KB");
-    vga_puts_at(mb,64,0,VGA_BLACK,VGA_CYAN);
-    vga_puts_at(kum_active?"KUM":"   ",76,0,kum_active?VGA_RED:VGA_DARK_GREY,VGA_CYAN);
+    char mb[16] = " mem "; char kb[12];
+    kitoa(kmalloc_used()/1024, kb, 10); kstrcat(mb, kb); kstrcat(mb, "K ");
+    statusbar_seg(&x, mb, VGA_YELLOW);
+
+    char modebuf[8]; kstrcpy(modebuf, kum_active ? " root " : " user ");
+    vga_puts_at(modebuf, x, 0, kum_active?VGA_LIGHT_RED:VGA_LIGHT_GREY, VGA_BLUE);
+
+    rtc_time_t now = rtc_read();
+    char clk[10]; char hh[3], mi[3], ss[3];
+    zpad2(now.hour,hh); zpad2(now.minute,mi); zpad2(now.second,ss);
+    kstrcpy(clk, hh); kstrcat(clk,":"); kstrcat(clk,mi); kstrcat(clk,":"); kstrcat(clk,ss);
+    vga_puts_at(clk, 80 - (int)kstrlen(clk) - 1, 0, VGA_WHITE, VGA_BLUE);
+
+    /* row 0 is reserved for this bar; push the cursor below it if nothing
+       has been printed there yet (fresh boot / just after `clear`) */
+    if (vga_get_row() == 0 && vga_get_col() == 0) {
+        vga_goto(1, 0);
+    }
 }
 
 static void draw_splash(void) {
@@ -124,14 +162,27 @@ static void draw_splash(void) {
 
 static void print_prompt(void) {
     draw_statusbar();
-    vga_set_color(kum_active?VGA_RED:VGA_GREEN,VGA_BLACK);
+
+    vga_color accent = kum_active ? VGA_LIGHT_RED : VGA_LIGHT_GREEN;
+
+    vga_set_color(VGA_DARK_GREY,VGA_BLACK);
+    vga_putchar((char)VGA_CH_TL); vga_putchar((char)VGA_CH_HLINE);
+    vga_putchar('(');
+    vga_set_color(accent,VGA_BLACK);
     vga_puts(kum_active?"root":"user");
     vga_set_color(VGA_WHITE,VGA_BLACK); vga_putchar('@');
-    vga_set_color(VGA_CYAN,VGA_BLACK);  vga_puts(hostname);
-    vga_set_color(VGA_WHITE,VGA_BLACK); vga_putchar(':');
-    vga_set_color(VGA_YELLOW,VGA_BLACK);vga_putchar('~');
+    vga_set_color(VGA_LIGHT_CYAN,VGA_BLACK); vga_puts(hostname);
+    vga_set_color(VGA_DARK_GREY,VGA_BLACK); vga_putchar(')');
+    vga_putchar((char)VGA_CH_HLINE); vga_putchar('[');
+    vga_set_color(VGA_YELLOW,VGA_BLACK); vga_putchar('~');
+    vga_set_color(VGA_DARK_GREY,VGA_BLACK); vga_putchar(']');
+    vga_putchar('\n');
+
+    vga_putchar((char)VGA_CH_BL); vga_putchar((char)VGA_CH_HLINE);
+    vga_set_color(accent,VGA_BLACK);
+    vga_putchar(kum_active?'#':'$');
     vga_set_color(VGA_WHITE,VGA_BLACK);
-    vga_puts(kum_active?"# ":"$ ");
+    vga_putchar(' ');
 }
 
 static void hist_add(const char *cmd) {
@@ -187,11 +238,11 @@ static void cmd_meminfo(void) {
     kprintf("  Demand faults:   %u handled  %u COW copies\n",
             demand_fault_count(), demand_cow_count());
     vga_puts("\n");
-    kprintf("  Static heap:     %u used / %u free  (0x200000-0x27FFFF)\n",
-            kmalloc_used(), kmalloc_free());
+    kprintf("  Static heap:     %u used / %u free  (base=0x%x, 512KB)\n",
+            kmalloc_used(), kmalloc_free(), kmalloc_base());
     kprintf("  Dynamic heap:    %u used  brk=0x%x  cap=%u KB\n",
             heap_used(), heap_brk(), heap_capacity()/1024);
-    vga_puts("  vmalloc region:  0x01000000 – 0x02000000  (16 MB)\n");
+    vga_puts("  vmalloc region:  0x01000000 - 0x02000000  (16 MB)\n");
     vga_puts("  Paging:          ENABLED  (CR0.PG=1)\n\n");
 }
 
@@ -203,9 +254,9 @@ static void cmd_vmem(void) {
     vga_puts("  ------              -----        ---          ----\n");
     vga_puts("  BIOS/IVT            0x00000000   0x000FFFFF   identity\n");
     vga_puts("  VGA framebuf        0x000B8000   0x000BFFFF   identity\n");
-    vga_puts("  Kernel              0x00100000   0x001FFFFF   identity R/W\n");
-    vga_puts("  Static heap         0x00200000   0x0027FFFF   identity R/W\n");
-    vga_puts("  Dynamic heap        0x00280000   0x00FFFFFF   demand-paged\n");
+    kprintf("  Kernel              0x00100000   0x%x   identity R/W\n", (uint32_t)kmalloc_base());
+    kprintf("  Static heap         0x%x   +512KB       identity R/W\n", (uint32_t)kmalloc_base());
+    vga_puts("  Dynamic heap        0x00700000   0x00FFFFFF   demand-paged\n");
     vga_puts("  vmalloc             0x01000000   0x02000000   on-demand\n");
     vga_puts("  [future user]       0x40000000   0xFFFFFFFF   unmapped\n\n");
 
@@ -223,6 +274,58 @@ static void cmd_vmem(void) {
     kprintf("    Heap brk:            0x%x  (%u KB used)\n",
             heap_brk(), heap_capacity()/1024);
     vga_putchar('\n');
+}
+
+static void cmd_pkg(const char *args) {
+    char sub[32], rest2[CMD_LEN];
+    split_cmd(args, sub, rest2, 32);
+
+    if (!*sub || kstrcmp(sub,"list")==0) {
+        vga_set_color(VGA_YELLOW,VGA_BLACK);
+        vga_puts("\n  === Packages ===\n\n");
+        vga_set_color(VGA_WHITE,VGA_BLACK);
+        for (int i=0;i<pkg_count();i++) {
+            vga_puts("  ");
+            vga_puts(pkg_is_installed(i) ? "[x] " : "[ ] ");
+            vga_puts(pkg_name_at(i));
+            int pad = 10 - (int)kstrlen(pkg_name_at(i));
+            for (int p=0;p<pad;p++) vga_putchar(' ');
+            vga_puts(pkg_desc_at(i));
+            vga_putchar('\n');
+        }
+        vga_putchar('\n');
+    } else if (kstrcmp(sub,"install")==0) {
+        if (!*rest2) { vga_puts("Usage: pkg install <name>\n"); return; }
+        int r = pkg_install(rest2);
+        if (r==0) kprintf("Installed '%s' -> disk\n", rest2);
+        else if (r==-1) kprintf("pkg: unknown package '%s'\n", rest2);
+        else if (r==-2) vga_puts("pkg: no disk mounted (run dformat first)\n");
+        else vga_puts("pkg: install failed (disk full?)\n");
+    } else if (kstrcmp(sub,"remove")==0) {
+        if (!*rest2) { vga_puts("Usage: pkg remove <name>\n"); return; }
+        int r = pkg_remove(rest2);
+        if (r==0) kprintf("Removed '%s'\n", rest2);
+        else if (r==-1) kprintf("pkg: unknown package '%s'\n", rest2);
+        else if (r==-2) vga_puts("pkg: no disk mounted\n");
+        else vga_puts("pkg: not installed\n");
+    } else if (kstrcmp(sub,"info")==0) {
+        int found=0;
+        for (int i=0;i<pkg_count();i++) {
+            if (kstrcmp(pkg_name_at(i), rest2)==0) {
+                found=1;
+                kprintf("  %s -> %s\n", pkg_name_at(i), pkg_fname_at(i));
+                kprintf("  %s\n", pkg_desc_at(i));
+                vga_puts(pkg_is_installed(i) ? "  Installed\n" : "  Not installed\n");
+            }
+        }
+        if (!found) kprintf("pkg: unknown package '%s'\n", rest2);
+    } else {
+        vga_puts("  Usage:\n");
+        vga_puts("    pkg list             - show available packages\n");
+        vga_puts("    pkg install <name>   - write package to FAT12 disk\n");
+        vga_puts("    pkg remove <name>    - delete package from disk\n");
+        vga_puts("    pkg info <name>      - show package details\n");
+    }
 }
 
 static void cmd_mmap(const char *args) {
@@ -498,6 +601,7 @@ static void cmd_help(void) {
     vga_puts("    meminfo  - RAM, frames, heap, demand-paging stats\n");
     vga_puts("    vmem     - Virtual memory map + live page table walk\n");
     vga_puts("    mmap     - Map/unmap/COW/query virtual pages\n");
+    vga_puts("    pkg      - list/install/remove/info bundled packages\n");
     vga_puts("    cpuinfo  - CPU via CPUID\n");
     vga_puts("    irqinfo  - GDT/IDT/PIC/PIT/Sched live status\n");
     vga_puts("    ifconfig          - NIC info + IP address\n");
@@ -662,6 +766,7 @@ static void dispatch(const char *line) {
                 swap_used_slots()*4, (uint32_t)256*4);
     }
     else if(kstrcmp(cmd,"mmap")==0){ cmd_mmap(rest); }
+    else if(kstrcmp(cmd,"pkg")==0){ cmd_pkg(rest); }
     else if(kstrcmp(cmd,"cpuinfo")==0){ cmd_cpuinfo(); }
     else if(kstrcmp(cmd,"irqinfo")==0){ cmd_irqinfo(); }
     else if(kstrcmp(cmd,"ifconfig")==0) {
@@ -971,8 +1076,10 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
         total_mem_kb = 32768;
     serial_printf("[boot] RAM: %u KB (%u MB)\r\n", total_mem_kb, total_mem_kb/1024);
 
-    kmalloc_init(0x00200000, 512*1024);
-    serial_printf("[boot] Heap @ 0x200000, 512KB\r\n");
+    extern uint8_t _kernel_end[];
+    uint32_t heap_base = ((uint32_t)_kernel_end + 0x10000 + 0xFFF) & ~0xFFFu;
+    kmalloc_init(heap_base, 512*1024);
+    serial_printf("[boot] Heap @ %x, 512KB\r\n", heap_base);
 
     gdt_init();
     serial_printf("[boot] GDT loaded (6 descriptors)\r\n");

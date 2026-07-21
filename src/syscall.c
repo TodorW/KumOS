@@ -438,8 +438,8 @@ typedef uint32_t (*syscall_fn)(uint32_t, uint32_t, uint32_t);
 
 static syscall_fn syscall_table[SYSCALL_MAX] = {
     [SYS_EXIT]    = sc_exit,
-    [SYS_WRITE]   = sc_vfs_write,
-    [SYS_READ]    = sc_vfs_read,
+    [SYS_WRITE]   = sc_write,
+    [SYS_READ]    = sc_read,
     [SYS_GETPID]  = sc_getpid,
     [SYS_SLEEP]   = sc_sleep,
     [SYS_YIELD]   = sc_yield,

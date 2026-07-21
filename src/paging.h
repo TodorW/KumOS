@@ -17,7 +17,7 @@
 #define PAGE_COW         (1 << 9)
 
 #define KERN_BASE        0x00100000
-#define HEAP_VIRT_BASE   0x00200000
+#define HEAP_VIRT_BASE   0x00700000
 #define HEAP_VIRT_MAX    0x01000000
 #define VMALLOC_BASE     0x01000000
 #define VMALLOC_END      0x02000000

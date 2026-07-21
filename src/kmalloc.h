@@ -9,5 +9,6 @@ void *kmalloc(size_t size);
 void  kfree(void *ptr);
 uint32_t kmalloc_free(void);
 uint32_t kmalloc_used(void);
+uint32_t kmalloc_base(void);
 
 #endif

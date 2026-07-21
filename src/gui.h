@@ -44,10 +44,7 @@
 void gui_init(void);
 void gui_exit(void);
 
-static inline void gui_pixel(int x, int y, uint8_t c) {
-    if ((unsigned)x < GUI_WIDTH && (unsigned)y < GUI_HEIGHT)
-        GUI_FB[y * GUI_WIDTH + x] = c;
-}
+void gui_pixel(int x, int y, uint8_t c);
 void gui_clear(uint8_t color);
 void gui_rect(int x, int y, int w, int h, uint8_t color);
 void gui_rect_fill(int x, int y, int w, int h, uint8_t color);

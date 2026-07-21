@@ -109,3 +109,5 @@ uint32_t kmalloc_free(void) {
     for (block_t *b = free_list; b; b = b->next) fr += b->size;
     return fr;
 }
+
+uint32_t kmalloc_base(void) { return heap_start; }

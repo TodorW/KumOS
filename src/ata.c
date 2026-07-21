@@ -119,14 +119,18 @@ static int ata_identify(int slave, ata_drive_t *drv) {
     return 0;
 }
 
-void ata_init(void) {
-
+static void ata_soft_reset(void) {
     outb(ATA_PRI_DEV_CTRL, 0x04);
     ata_delay(); ata_delay();
     outb(ATA_PRI_DEV_CTRL, 0x00);
     ata_delay(); ata_delay();
+}
 
-    ata_identify(0, &drives[0]);
+void ata_init(void) {
+    for (int attempt = 0; attempt < 3; attempt++) {
+        ata_soft_reset();
+        if (ata_identify(0, &drives[0]) == 0) break;
+    }
     ata_identify(1, &drives[1]);
 }
 

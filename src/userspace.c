@@ -15,6 +15,8 @@
 #define USER_CS  0x1B
 #define USER_DS  0x23
 
+extern void user_entry_trampoline(void);
+
 static void user_task_setup(task_t *t, void (*entry)(void), uint32_t user_esp) {
 
     uint32_t *sp = (uint32_t *)((uint8_t *)t->stack + t->stack_size);
@@ -30,6 +32,10 @@ static void user_task_setup(task_t *t, void (*entry)(void), uint32_t user_esp) {
 
     *--sp = USER_DS;
 
+    *--sp = (uint32_t)user_entry_trampoline;
+
+    *--sp = 0;
+    *--sp = 0;
     *--sp = 0;
     *--sp = 0;
 

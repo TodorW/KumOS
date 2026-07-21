@@ -2,6 +2,7 @@
 #include "idt.h"
 #include "process.h"
 #include "signal.h"
+#include "sched.h"
 #include <stdint.h>
 
 #define PIT_CHANNEL0  0x40
@@ -16,10 +17,10 @@ static inline void outb(uint16_t port, uint8_t val) {
 }
 
 static void timer_callback(registers_t *r) {
-    (void)r;
     tick_count++;
     proc_tick();
     if (tick_count % 10 == 0) signal_check();
+    sched_tick(r);
 }
 
 void timer_init(uint32_t hz) {

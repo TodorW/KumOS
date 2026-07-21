@@ -9,7 +9,7 @@ static int terminal_col;
 static uint8_t terminal_color;
 
 static uint16_t vga_entry(char c, uint8_t color) {
-    return (uint16_t)c | ((uint16_t)color << 8);
+    return (uint16_t)(uint8_t)c | ((uint16_t)color << 8);
 }
 
 static uint8_t vga_color_make(vga_color fg, vga_color bg) {
@@ -100,19 +100,19 @@ void vga_puts_at(const char *str, int x, int y, vga_color fg, vga_color bg) {
 void vga_draw_box(int x, int y, int w, int h, vga_color fg, vga_color bg) {
     uint8_t color = vga_color_make(fg, bg);
 
-    VGA_MEM[y * VGA_WIDTH + x] = vga_entry('+', color);
-    VGA_MEM[y * VGA_WIDTH + x + w - 1] = vga_entry('+', color);
-    VGA_MEM[(y+h-1) * VGA_WIDTH + x] = vga_entry('+', color);
-    VGA_MEM[(y+h-1) * VGA_WIDTH + x + w - 1] = vga_entry('+', color);
+    VGA_MEM[y * VGA_WIDTH + x] = vga_entry((char)VGA_CH_TL, color);
+    VGA_MEM[y * VGA_WIDTH + x + w - 1] = vga_entry((char)VGA_CH_TR, color);
+    VGA_MEM[(y+h-1) * VGA_WIDTH + x] = vga_entry((char)VGA_CH_BL, color);
+    VGA_MEM[(y+h-1) * VGA_WIDTH + x + w - 1] = vga_entry((char)VGA_CH_BR, color);
 
     for (int i = 1; i < w-1; i++) {
-        VGA_MEM[y * VGA_WIDTH + x + i] = vga_entry('-', color);
-        VGA_MEM[(y+h-1) * VGA_WIDTH + x + i] = vga_entry('-', color);
+        VGA_MEM[y * VGA_WIDTH + x + i] = vga_entry((char)VGA_CH_HLINE, color);
+        VGA_MEM[(y+h-1) * VGA_WIDTH + x + i] = vga_entry((char)VGA_CH_HLINE, color);
     }
 
     for (int i = 1; i < h-1; i++) {
-        VGA_MEM[(y+i) * VGA_WIDTH + x] = vga_entry('|', color);
-        VGA_MEM[(y+i) * VGA_WIDTH + x + w - 1] = vga_entry('|', color);
+        VGA_MEM[(y+i) * VGA_WIDTH + x] = vga_entry((char)VGA_CH_VLINE, color);
+        VGA_MEM[(y+i) * VGA_WIDTH + x + w - 1] = vga_entry((char)VGA_CH_VLINE, color);
     }
 }
 
@@ -125,6 +125,12 @@ void vga_fill_rect(int x, int y, int w, int h, char ch, vga_color fg, vga_color 
 
 int vga_get_col(void) { return terminal_col; }
 int vga_get_row(void) { return terminal_row; }
+
+void vga_goto(int row, int col) {
+    terminal_row = row;
+    terminal_col = col;
+    vga_set_cursor(col, row);
+}
 
 void vga_put_hex(uint32_t val) {
     char buf[11];

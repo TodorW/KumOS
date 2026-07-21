@@ -18,23 +18,14 @@ static void task_setup_stack(task_t *t, void (*entry)(void)) {
 
     uint32_t *sp = (uint32_t *)((uint8_t *)t->stack + t->stack_size);
 
-    *--sp = 0x10;
-    uint32_t esp_val = (uint32_t)sp + 20;
-    *--sp = esp_val;
-    *--sp = 0x202;
-    *--sp = 0x08;
+    /* switch_context resumes a task via a bare `ret` after popping
+       edi,esi,ebx,ebp (no iret) — these are ring-0 kernel tasks, no
+       privilege transition needed, so the resume target is just `entry`. */
     *--sp = (uint32_t)entry;
-
     *--sp = 0;
     *--sp = 0;
     *--sp = 0;
     *--sp = 0;
-    *--sp = 0;
-    *--sp = 0;
-    *--sp = 0;
-    *--sp = 0;
-
-    *--sp = 0x10;
 
     t->esp = (uint32_t)sp;
 }

@@ -21,7 +21,7 @@ KERN_OBJS = \
     src/signal.o src/net.o src/procfs.o src/users.o \
     src/dns.o src/dmesg.o src/dhcp.o src/ext2.o src/swap.o \
     src/syscall.o src/userspace.o src/elf.o \
-    src/serial.o src/rtc.o src/mouse.o src/gui.o src/kernel.o
+    src/serial.o src/rtc.o src/mouse.o src/gui.o src/pkg.o src/kernel.o
 
 USER_PROGS = \
     user/hello.elf user/counter.elf user/cat.elf user/sysinfo.elf \
@@ -29,13 +29,18 @@ USER_PROGS = \
     user/crond.elf user/http.elf user/grep.elf user/tar.elf \
     user/wc.elf user/sort.elf user/uniq.elf user/awk.elf
 
+PKG_NAMES = hello counter cat sysinfo kush ed vi top crond http grep tar wc sort uniq awk
+PKG_BLOBS = $(addprefix user/,$(addsuffix _blob.o,$(PKG_NAMES)))
+
 all: kumos.bin
 boot/%.o: boot/%.asm
 	@$(ASM) $(ASMFLAGS) $< -o $@
 src/%.o: src/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
-kumos.bin: $(KERN_OBJS)
-	@$(LD) $(LDFLAGS) -o $@ $(KERN_OBJS) 2>/tmp/kumos-ld-stderr.$$$$; ec=$$?; grep -v deprecated /tmp/kumos-ld-stderr.$$$$ 1>&2; rm -f /tmp/kumos-ld-stderr.$$$$; exit $$ec
+user/%_blob.o: user/%.elf
+	@cd user && objcopy -I binary -O elf32-i386 -B i386 $*.elf $*_blob.o
+kumos.bin: $(KERN_OBJS) $(PKG_BLOBS)
+	@$(LD) $(LDFLAGS) -o $@ $(KERN_OBJS) $(PKG_BLOBS) 2>/tmp/kumos-ld-stderr.$$$$; ec=$$?; grep -v deprecated /tmp/kumos-ld-stderr.$$$$ 1>&2; rm -f /tmp/kumos-ld-stderr.$$$$; exit $$ec
 	@echo "Kernel: $$(ls -lh $@ | awk '{print $$5}')"
 user/%.elf: user/%.c
 	@$(CC) $(UFLAGS) -Ttext=0x400000 -o $@ $<
@@ -58,5 +63,5 @@ run-serial: iso
 	    -boot order=d -cdrom kumos.iso -hda disk.img -m 128M -vga std -no-reboot \
 	    -serial stdio
 clean:
-	@rm -f $(KERN_OBJS) kumos.bin kumos.iso iso/boot/kumos.bin user/*.elf
+	@rm -f $(KERN_OBJS) $(PKG_BLOBS) kumos.bin kumos.iso iso/boot/kumos.bin user/*.elf
 .PHONY: all iso run run-net run-serial clean user-programs

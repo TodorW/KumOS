@@ -136,6 +136,7 @@ global isr128
 
 isr128:
 
+    push eax
     push edx
     push ecx
     push ebx
@@ -151,9 +152,9 @@ isr128:
     mov gs, ax
 
     mov eax, [esp+28]
-    mov ebx, [esp+24]
+    mov ebx, [esp+16]
     mov ecx, [esp+20]
-    mov edx, [esp+16]
+    mov edx, [esp+24]
 
     push edx
     push ecx
@@ -169,5 +170,6 @@ isr128:
     pop ebx
     pop ecx
     pop edx
+    add esp, 4
 
     iret
