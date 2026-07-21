@@ -1,12 +1,14 @@
 GCC_INC := $(shell find /usr/lib/gcc -name "stddef.h" 2>/dev/null | head -1 | xargs dirname)
 CC       = gcc
 CFLAGS   = -m32 -ffreestanding -O2 -Wall -fno-stack-protector -fno-builtin \
+           -mno-sse -mno-sse2 -mno-mmx -mno-80387 -mgeneral-regs-only \
            -nostdlib -nostdinc -I$(GCC_INC) -Isrc
 ASM      = nasm
 ASMFLAGS = -f elf32
 LD       = ld
 LDFLAGS  = -m elf_i386 -T linker.ld
 UFLAGS   = -m32 -nostdlib -nostartfiles -static -O2 -fno-stack-protector \
+           -mno-sse -mno-sse2 -mno-mmx -mno-80387 -mgeneral-regs-only \
            -fno-builtin -Wl,--build-id=none -Wl,-z,norelro -Iuser
 GRUB_MKR = $(shell command -v grub2-mkrescue 2>/dev/null || command -v grub-mkrescue 2>/dev/null)
 
@@ -33,7 +35,7 @@ boot/%.o: boot/%.asm
 src/%.o: src/%.c
 	@$(CC) $(CFLAGS) -c $< -o $@
 kumos.bin: $(KERN_OBJS)
-	@$(LD) $(LDFLAGS) -o $@ $(KERN_OBJS) 2>&1 | grep -v deprecated
+	@$(LD) $(LDFLAGS) -o $@ $(KERN_OBJS) 2>/tmp/kumos-ld-stderr.$$$$; ec=$$?; grep -v deprecated /tmp/kumos-ld-stderr.$$$$ 1>&2; rm -f /tmp/kumos-ld-stderr.$$$$; exit $$ec
 	@echo "Kernel: $$(ls -lh $@ | awk '{print $$5}')"
 user/%.elf: user/%.c
 	@$(CC) $(UFLAGS) -Ttext=0x400000 -o $@ $<

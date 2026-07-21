@@ -27,7 +27,10 @@ Kernel:
   - /proc virtual filesystem (meminfo, uptime, ps, net, date, version)
   - RTC (CMOS clock), serial UART at 115200 baud (COM1)
   - User account system (root/user/guest, password hashing)
-  - VGA Mode 13h graphics subsystem
+  - VGA Mode 13h graphics subsystem with a windowed GUI desktop:
+    draggable/closable windows, taskbar with live window tabs,
+    Terminal (real command execution), Files (FAT12 browser with
+    file preview), System Monitor (live CPU/memory/task stats)
 
 Userspace:
   - kush  -- ring-3 shell (ls, cat, cp, rm, cd, pwd, pipe support)
@@ -52,7 +55,8 @@ Shell commands (kernel shell):
   login / users / whoami
   exec <file.elf> -- load and run ELF from disk
   kush            -- launch userspace shell
-  gui             -- VGA Mode 13h desktop (experimental)
+  gui             -- VGA Mode 13h desktop: draggable windows, taskbar,
+                     Terminal/Files/System Monitor apps (see below)
   reboot / shutdown (requires kum)
 
 

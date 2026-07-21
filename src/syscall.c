@@ -16,6 +16,8 @@
 #include "elf.h"
 #include "signal.h"
 #include "kstring.h"
+#include "kmalloc.h"
+#include "net.h"
 #include <stdint.h>
 
 extern void isr128(void);

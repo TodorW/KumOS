@@ -187,7 +187,7 @@ char keyboard_getchar_blocking(void) {
         char c = poll_once();
         if (c) return c;
 
-        __asm__ volatile("sti; hlt; cli");
+        __asm__ volatile("sti; hlt");
 
     }
 }

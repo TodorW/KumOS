@@ -64,7 +64,6 @@ void gui_button(int x, int y, int w, int h, const char *label, int pressed);
 void gui_icon(int x, int y, const char *label, uint8_t icon_color);
 
 void gui_draw_cursor(int x, int y);
-void gui_erase_cursor(int x, int y);
 
 void gui_draw_desktop(void);
 void gui_draw_taskbar(void);

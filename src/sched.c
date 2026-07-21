@@ -236,6 +236,15 @@ static const char *tstate(task_state_t s) {
     }
 }
 
+int sched_task_count(void) { return task_count; }
+
+task_t *sched_task_at(int index) {
+    if (index < 0 || index >= task_count) return 0;
+    return &tasks[index];
+}
+
+int sched_current_index(void) { return current_idx; }
+
 void sched_list(void) {
     vga_set_color(VGA_YELLOW, VGA_BLACK);
     vga_puts("  PID  STATE  TICKS   KUM  NAME\n");

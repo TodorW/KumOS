@@ -183,20 +183,20 @@ void exc_register(int n, irq_handler_t handler) {
     if (n >= 0 && n < 32) exc_handlers[n] = handler;
 }
 
-void isr_handler(registers_t r) {
+void isr_handler(registers_t *r) {
 
-    if (r.int_no < 32 && exc_handlers[r.int_no]) {
-        exc_handlers[r.int_no](&r);
+    if (r->int_no < 32 && exc_handlers[r->int_no]) {
+        exc_handlers[r->int_no](r);
         return;
     }
-    draw_panic(&r);
+    draw_panic(r);
 }
 
-void irq_handler(registers_t r) {
-    uint8_t irq = (uint8_t)(r.int_no - 32);
+void irq_handler(registers_t *r) {
+    uint8_t irq = (uint8_t)(r->int_no - 32);
     pic_eoi(irq);
     if (irq < 16 && irq_handlers[irq])
-        irq_handlers[irq](&r);
+        irq_handlers[irq](r);
 }
 
 void irq_register(int irq, irq_handler_t handler) {
