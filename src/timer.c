@@ -47,5 +47,5 @@ uint32_t timer_seconds(void) {
 void timer_sleep(uint32_t ms) {
     uint32_t target = tick_count + (ms * tick_hz / 1000);
     while (tick_count < target)
-        __asm__ volatile ("hlt");
+        __asm__ volatile ("sti; hlt");
 }
