@@ -16,6 +16,10 @@ static int do_wc(void) {
     return 0;
 }
 
+static int cmp_str(const void *a, const void *b) {
+    return strcmp(*(const char * const *)a, *(const char * const *)b);
+}
+
 static int do_sort(void) {
     char *lines[512]; int nlines=0;
     static char buf[32768]; int total=0; int n;
@@ -28,7 +32,7 @@ static int do_sort(void) {
         lines[nlines++]=p;
         p=nl?nl+1:p+strlen(p);
     }
-    qsort(lines,(size_t)nlines,sizeof(char*),(int(*)(const void*,const void*))strcmp);
+    qsort(lines,(size_t)nlines,sizeof(char*),cmp_str);
     for(int i=0;i<nlines;i++) { fputs(lines[i]); putchar('\n'); }
     return 0;
 }

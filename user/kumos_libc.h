@@ -195,7 +195,8 @@ static int printf(const char *fmt, ...) {
         if (*fmt != '%') { buf[pos++] = *fmt++; continue; }
         fmt++;
 
-        int zero_pad = 0, width = 0;
+        int left = 0, zero_pad = 0, width = 0;
+        if (*fmt == '-') { left = 1; fmt++; }
         if (*fmt == '0') { zero_pad = 1; fmt++; }
         while (*fmt >= '0' && *fmt <= '9') { width = width*10 + (*fmt-'0'); fmt++; }
 
@@ -203,8 +204,9 @@ static int printf(const char *fmt, ...) {
             char *s = __builtin_va_arg(ap, char*);
             if (!s) s = "(null)";
             int len = (int)strlen(s);
-            for (int p = len; p < width; p++) buf[pos++] = ' ';
+            if (!left) for (int p = len; p < width; p++) buf[pos++] = ' ';
             while (*s && pos < 1022) buf[pos++] = *s++;
+            if (left) for (int p = len; p < width && pos < 1022; p++) buf[pos++] = ' ';
         } else if (*fmt == 'd' || *fmt == 'i') {
             int d = __builtin_va_arg(ap, int);
             char tmp[16]; int ti=0, neg=0;
@@ -213,16 +215,18 @@ static int printf(const char *fmt, ...) {
             else { unsigned u=(unsigned)d; while(u){tmp[ti++]='0'+u%10;u/=10;} }
             if (neg) tmp[ti++]='-';
             int pad = width - ti; char pc = zero_pad?'0':' ';
-            while (pad-->0 && pos<1022) buf[pos++]=pc;
+            if (!left) while (pad-->0 && pos<1022) buf[pos++]=pc;
             while (ti>0 && pos<1022) buf[pos++]=tmp[--ti];
+            if (left) while (pad-->0 && pos<1022) buf[pos++]=' ';
         } else if (*fmt == 'u') {
             unsigned u = __builtin_va_arg(ap, unsigned);
             char tmp[16]; int ti=0;
             if (!u) tmp[ti++]='0';
             else { while(u){tmp[ti++]='0'+u%10;u/=10;} }
             int pad=width-ti; char pc=zero_pad?'0':' ';
-            while(pad-->0&&pos<1022)buf[pos++]=pc;
+            if (!left) while(pad-->0&&pos<1022)buf[pos++]=pc;
             while(ti>0&&pos<1022)buf[pos++]=tmp[--ti];
+            if (left) while(pad-->0&&pos<1022)buf[pos++]=' ';
         } else if (*fmt == 'x' || *fmt == 'X') {
             unsigned u = __builtin_va_arg(ap, unsigned);
             const char *h = (*fmt=='x')?"0123456789abcdef":"0123456789ABCDEF";
@@ -230,8 +234,9 @@ static int printf(const char *fmt, ...) {
             if (!u) tmp[ti++]='0';
             else { while(u){tmp[ti++]=h[u&0xF];u>>=4;} }
             int pad=width-ti; char pc=zero_pad?'0':' ';
-            while(pad-->0&&pos<1022)buf[pos++]=pc;
+            if (!left) while(pad-->0&&pos<1022)buf[pos++]=pc;
             while(ti>0&&pos<1022)buf[pos++]=tmp[--ti];
+            if (left) while(pad-->0&&pos<1022)buf[pos++]=' ';
         } else if (*fmt == 'c') {
             buf[pos++] = (char)__builtin_va_arg(ap, int);
         } else if (*fmt == '%') {
