@@ -15,7 +15,6 @@
 #include "ata.h"
 #include "fat12.h"
 #include "syscall.h"
-#include "userspace.h"
 #include "elf.h"
 #include "serial.h"
 #include "rtc.h"
@@ -1072,27 +1071,29 @@ static void dispatch(const char *line) {
             vga_set_color(VGA_YELLOW,VGA_BLACK);
             vga_puts("  Available programs:\n");
             vga_set_color(VGA_WHITE,VGA_BLACK);
-            for (int i = 0; i < uprog_count; i++) {
-                vga_puts("    run "); vga_puts(uprog_list[i].name); vga_putchar('\n');
+            for (int i = 0; i < pkg_count(); i++) {
+                vga_puts("    run "); vga_puts(pkg_name_at(i)); vga_putchar('\n');
             }
             vga_putchar('\n');
         } else {
-            int found = 0;
-            for (int i = 0; i < uprog_count; i++) {
-                if (kstrcmp(rest, uprog_list[i].name) == 0) {
-                    found = 1;
-                    int pid = user_spawn(rest, uprog_list[i].entry);
-                    if (pid < 0) {
-                        vga_puts("run: failed to spawn process\n");
-                    } else {
+            int i = pkg_find_index(rest);
+            if (i < 0) {
+                kprintf("run: unknown program '%s' — type 'run' to list\n", rest);
+            } else {
+                const uint8_t *start, *end;
+                pkg_blob_at(i, &start, &end);
+                elf_load_result_t r = elf_load_mem(start, (uint32_t)(end - start));
+                if (r.error == 0) {
+                    int pid = elf_spawn(rest, &r);
+                    if (pid >= 0) {
                         kprintf("  Spawned '%s' as ring-3 process  PID=%d\n", rest, pid);
                         int code = sched_waitpid(pid);
                         kprintf("  Process exited with code %d\n", code);
-                    }
-                    break;
+                    } else vga_puts("run: failed to spawn process\n");
+                } else {
+                    kprintf("run: bad ELF (error %d)\n", r.error);
                 }
             }
-            if (!found) kprintf("run: unknown program '%s' — type 'run' to list\n", rest);
         }
     }
     else if(kstrcmp(cmd,"history")==0){

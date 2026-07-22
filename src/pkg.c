@@ -23,6 +23,7 @@ PKG_DECL(wc)
 PKG_DECL(sort)
 PKG_DECL(uniq)
 PKG_DECL(awk)
+PKG_DECL(echo)
 
 typedef struct {
     const char *cmd;
@@ -51,6 +52,7 @@ static const pkg_entry_t pkgs[] = {
     PKG_ENTRY(sort,    "SORT.ELF",    "Sort lines"),
     PKG_ENTRY(uniq,    "UNIQ.ELF",    "Dedup lines"),
     PKG_ENTRY(awk,     "AWK.ELF",     "Text processor"),
+    PKG_ENTRY(echo,    "ECHO.ELF",    "Read + echo a line"),
 };
 
 #define PKG_COUNT ((int)(sizeof(pkgs)/sizeof(pkgs[0])))
@@ -90,4 +92,13 @@ int pkg_remove(const char *name) {
     if (i < 0) return -1;
     if (!fat12_mounted()) return -2;
     return fat12_delete(pkgs[i].fname);
+}
+
+int pkg_find_index(const char *name) { return pkg_find(name); }
+
+int pkg_blob_at(int i, const uint8_t **start, const uint8_t **end) {
+    if (i < 0 || i >= PKG_COUNT) return -1;
+    *start = pkgs[i].start;
+    *end   = pkgs[i].end;
+    return 0;
 }

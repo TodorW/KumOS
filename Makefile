@@ -20,16 +20,16 @@ KERN_OBJS = \
     src/ata.o src/fat12.o src/pipe.o src/vfs.o \
     src/signal.o src/net.o src/procfs.o src/users.o \
     src/dns.o src/dmesg.o src/dhcp.o src/ext2.o src/swap.o \
-    src/syscall.o src/userspace.o src/elf.o \
+    src/syscall.o src/elf.o \
     src/serial.o src/rtc.o src/mouse.o src/gui.o src/pkg.o src/kernel.o
 
 USER_PROGS = \
     user/hello.elf user/counter.elf user/cat.elf user/sysinfo.elf \
     user/kush.elf user/ed.elf user/vi.elf user/top.elf \
     user/crond.elf user/http.elf user/grep.elf user/tar.elf \
-    user/wc.elf user/sort.elf user/uniq.elf user/awk.elf
+    user/wc.elf user/sort.elf user/uniq.elf user/awk.elf user/echo.elf
 
-PKG_NAMES = hello counter cat sysinfo kush ed vi top crond http grep tar wc sort uniq awk
+PKG_NAMES = hello counter cat sysinfo kush ed vi top crond http grep tar wc sort uniq awk echo
 PKG_BLOBS = $(addprefix user/,$(addsuffix _blob.o,$(PKG_NAMES)))
 
 all: kumos.bin
