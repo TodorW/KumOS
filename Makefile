@@ -51,16 +51,18 @@ iso: kumos.bin
 	@cp kumos.bin iso/boot/kumos.bin && cp grub.cfg iso/boot/grub/grub.cfg
 	@$(GRUB_MKR) -o kumos.iso iso/ 2>/dev/null
 	@echo "ISO: $$(ls -lh kumos.iso | awk '{print $$5}')"
-run: iso
+ext2.img:
+	@dd if=/dev/zero of=$@ bs=1M count=8 status=none
+run: iso ext2.img
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
-	    -boot order=d -cdrom kumos.iso -hda disk.img -m 128M -vga std -no-reboot
-run-net: iso
+	    -boot order=d -cdrom kumos.iso -hda disk.img -hdb ext2.img -m 128M -vga std -no-reboot
+run-net: iso ext2.img
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
-	    -boot order=d -cdrom kumos.iso -hda disk.img -m 128M -vga std -no-reboot \
+	    -boot order=d -cdrom kumos.iso -hda disk.img -hdb ext2.img -m 128M -vga std -no-reboot \
 	    -nic user
-run-serial: iso
+run-serial: iso ext2.img
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
-	    -boot order=d -cdrom kumos.iso -hda disk.img -m 128M -vga std -no-reboot \
+	    -boot order=d -cdrom kumos.iso -hda disk.img -hdb ext2.img -m 128M -vga std -no-reboot \
 	    -serial stdio
 clean:
 	@rm -f $(KERN_OBJS) $(PKG_BLOBS) kumos.bin kumos.iso iso/boot/kumos.bin user/*.elf

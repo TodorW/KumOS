@@ -32,7 +32,7 @@ typedef struct {
     uint16_t s_def_resuid, s_def_resgid;
     uint32_t s_first_ino;
     uint16_t s_inode_size;
-    uint8_t  pad[940];
+    uint8_t  pad[934];
 } __attribute__((packed)) ext2_super_t;
 
 typedef struct {
@@ -72,11 +72,16 @@ typedef struct {
     char     name[256];
 } __attribute__((packed)) ext2_dirent_t;
 
-int  ext2_init(uint32_t lba_start);
+int  ext2_init(int drive, uint32_t lba_start);
+int  ext2_format(int drive, uint32_t lba_start);
+int  ext2_mounted(void);
+
 int  ext2_read_file(const char *path, void *buf, uint32_t sz);
+int  ext2_write_file(const char *path, const void *buf, uint32_t size);
+int  ext2_delete_file(const char *path);
 int  ext2_list_dir(const char *path, char *buf, uint32_t sz);
 int  ext2_stat(const char *path, uint32_t *size_out);
-int  ext2_mounted(void);
+void ext2_info(void);
 
 extern vfs_ops_t ext2_vfs_ops;
 #endif

@@ -582,6 +582,88 @@ static void cmd_dcp(const char *args) {
     fs_write(dst, (char *)cbuf);
     kprintf("Copied disk:'%s' -> mem:'%s' (%d bytes)\n", src, dst, n);
 }
+
+static void cmd_edisk(void) {
+    ext2_info();
+}
+
+static void cmd_els(void) {
+    if (!ext2_mounted()) {
+        vga_puts("  No EXT2 volume mounted. Run 'eformat' first.\n");
+        return;
+    }
+    static char buf[2048];
+    int n = ext2_list_dir("/", buf, sizeof(buf));
+    if (n <= 0) { vga_puts("  (empty)\n"); return; }
+    vga_set_color(VGA_YELLOW, VGA_BLACK);
+    vga_puts("\n  EXT2 /\n\n");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_puts("  ");
+    for (int i = 0; i < n; i++) {
+        if (buf[i] == '\n') vga_puts("\n  "); else vga_putchar(buf[i]);
+    }
+    vga_putchar('\n');
+}
+
+static void cmd_ecat(const char *name) {
+    if (!*name) { vga_puts("Usage: ecat <filename>\n"); return; }
+    if (!ext2_mounted()) { vga_puts("No EXT2 volume mounted.\n"); return; }
+    static uint8_t fbuf[8192];
+    int n = ext2_read_file(name, fbuf, sizeof(fbuf)-1);
+    if (n < 0) { kprintf("ecat: '%s' not found on ext2.\n", name); return; }
+    fbuf[n] = 0;
+    vga_putchar('\n');
+    vga_puts((char *)fbuf);
+    vga_putchar('\n');
+}
+
+static void cmd_ewrite(const char *args) {
+    char fname[64], data[CMD_LEN];
+    split_cmd(args, fname, data, 64);
+    if (!*fname || !*data) {
+        vga_puts("Usage: ewrite <filename> <content>\n"); return;
+    }
+    if (!ext2_mounted()) { vga_puts("No EXT2 volume mounted.\n"); return; }
+    int n = ext2_write_file(fname, data, kstrlen(data));
+    if (n >= 0)
+        kprintf("Written '%s' (%u bytes) to ext2.\n", fname, kstrlen(data));
+    else
+        vga_puts("ewrite: failed (volume full or I/O error)\n");
+}
+
+static void cmd_erm(const char *name) {
+    if (!*name) { vga_puts("Usage: erm <filename>\n"); return; }
+    if (!ext2_mounted()) { vga_puts("No EXT2 volume mounted.\n"); return; }
+    if (!kum_active) { vga_puts("Permission denied. Use 'kum erm <file>'\n"); return; }
+    if (ext2_delete_file(name) == 0)
+        kprintf("Deleted '%s' from ext2.\n", name);
+    else
+        kprintf("erm: '%s' not found.\n", name);
+}
+
+static void cmd_eformat(void) {
+    if (!kum_active) {
+        vga_puts("Permission denied. Use 'kum eformat'\n"); return;
+    }
+    if (ata_get(1) == 0) {
+        vga_puts("eformat: no second ATA drive found (need a drive-1 image).\n"); return;
+    }
+    vga_set_color(VGA_YELLOW, VGA_BLACK);
+    vga_puts("Formatting drive 1 with EXT2...\n");
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    if (ext2_format(1, 0) == 0) {
+        vga_puts("Format complete. Volume mounted at /ext2.\n");
+        const char *welcome =
+            "Welcome to KumOS!\n"
+            "This file lives on the ext2 volume and survives reboots.\n"
+            "Use els, ecat, ewrite, erm to manage it.\n";
+        ext2_write_file("README.TXT", welcome, kstrlen(welcome));
+        vga_puts("Created README.TXT on ext2.\n");
+    } else {
+        vga_puts("eformat: failed.\n");
+    }
+}
+
 static void dispatch(const char *line);
 
 static void cmd_help(void) {
@@ -621,6 +703,14 @@ static void cmd_help(void) {
     vga_puts("    drm <f>           - Delete file from disk (kum)\n");
     vga_puts("    dformat           - Format disk FAT12 (kum)\n");
     vga_puts("    dcp <disk> <mem>  - Copy disk file to memory fs\n");
+    vga_set_color(VGA_YELLOW,VGA_BLACK); vga_puts("  Disk (EXT2 on 2nd ATA drive):\n");
+    vga_set_color(VGA_WHITE,VGA_BLACK);
+    vga_puts("    edisk             - EXT2 volume info\n");
+    vga_puts("    els               - List files on ext2\n");
+    vga_puts("    ecat <f>          - Print file from ext2\n");
+    vga_puts("    ewrite <f> <data> - Write file to ext2\n");
+    vga_puts("    erm <f>           - Delete file from ext2 (kum)\n");
+    vga_puts("    eformat           - Format ext2 volume (kum)\n");
     vga_set_color(VGA_YELLOW,VGA_BLACK); vga_puts("  Userspace (ring 3):\n");
     vga_set_color(VGA_WHITE,VGA_BLACK);
     vga_puts("    run               - List user programs\n");
@@ -962,6 +1052,12 @@ static void dispatch(const char *line) {
     else if(kstrcmp(cmd,"drm")==0)   { cmd_drm(rest); }
     else if(kstrcmp(cmd,"dformat")==0){ cmd_dformat(); }
     else if(kstrcmp(cmd,"dcp")==0)   { cmd_dcp(rest); }
+    else if(kstrcmp(cmd,"edisk")==0) { cmd_edisk(); }
+    else if(kstrcmp(cmd,"els")==0)   { cmd_els(); }
+    else if(kstrcmp(cmd,"ecat")==0)  { cmd_ecat(rest); }
+    else if(kstrcmp(cmd,"ewrite")==0){ cmd_ewrite(rest); }
+    else if(kstrcmp(cmd,"erm")==0)   { cmd_erm(rest); }
+    else if(kstrcmp(cmd,"eformat")==0){ cmd_eformat(); }
     else if(kstrcmp(cmd,"run")==0) {
         if (!*rest) {
             vga_set_color(VGA_YELLOW,VGA_BLACK);
@@ -1147,10 +1243,12 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
         dmesg_log("net: no NIC found");
     }
 
-    if (ext2_init(2048) == 0) {
+    if (ext2_init(1, 0) == 0) {
         vfs_mount("/ext2", &ext2_vfs_ops);
-        serial_printf("[boot] EXT2 mounted at /ext2\r\n");
+        serial_printf("[boot] EXT2 mounted at /ext2 (drive 1)\r\n");
         dmesg_log("ext2: mounted at /ext2");
+    } else {
+        serial_printf("[boot] No EXT2 volume on drive 1 (run 'eformat')\r\n");
     }
 
     if (swap_init() == 0) {
