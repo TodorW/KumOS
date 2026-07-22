@@ -18,6 +18,8 @@ void  pipe_init(void);
 int   pipe_create(void);
 void  pipe_close_read(int id);
 void  pipe_close_write(int id);
+void  pipe_dup_read(int id);
+void  pipe_dup_write(int id);
 int   pipe_write(int id, const void *buf, uint32_t len);
 int   pipe_read (int id, void *buf, uint32_t len);
 int   pipe_has_data(int id);

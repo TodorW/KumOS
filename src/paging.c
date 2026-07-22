@@ -408,6 +408,10 @@ void paging_switch(uint32_t dir_phys) {
     load_cr3(dir_phys);
 }
 
+uint32_t paging_root_dir(void) {
+    return (uint32_t)page_dir;
+}
+
 uint32_t paging_clone_dir(void) {
     uint32_t new_dir_phys = pmm_alloc();
     if (!new_dir_phys) return 0;

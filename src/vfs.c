@@ -428,6 +428,7 @@ int vfs_pipe(int fds[2]) {
 
     int r = alloc_fd();
     if (r < 0) { pipe_close_read(id); pipe_close_write(id); return -1; }
+    fd_table[r].used=1;
     int w = alloc_fd();
     if (w < 0) { fd_table[r].used=0; pipe_close_read(id); pipe_close_write(id); return -1; }
 
@@ -446,8 +447,13 @@ int vfs_pipe(int fds[2]) {
 int vfs_dup2(int oldfd, int newfd) {
     if (oldfd<0||oldfd>=VFS_MAX_FD||!fd_table[oldfd].used) return -1;
     if (newfd<0||newfd>=VFS_MAX_FD) return -1;
+    if (newfd == oldfd) return newfd;
     if (fd_table[newfd].used) vfs_close(newfd);
     fd_table[newfd] = fd_table[oldfd];
+    if (fd_table[newfd].type == VFS_PIPE) {
+        if (fd_table[newfd].pipe_end == 0) pipe_dup_read(fd_table[newfd].pipe_id);
+        else                               pipe_dup_write(fd_table[newfd].pipe_id);
+    }
     return newfd;
 }
 

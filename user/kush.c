@@ -102,6 +102,59 @@ static int do_cat(char *argv[], int argc) {
     return 0;
 }
 
+static int do_wc(char *argv[], int argc) {
+    (void)argv; (void)argc;
+    char buf[512]; int n;
+    uint32_t lines=0, words=0, bytes=0;
+    int in_word=0;
+    while ((n = fread(0, buf, sizeof(buf))) > 0) {
+        bytes += (uint32_t)n;
+        for (int i=0;i<n;i++) {
+            if (buf[i]=='\n') lines++;
+            if (buf[i]==' '||buf[i]=='\t'||buf[i]=='\n') in_word=0;
+            else if (!in_word) { in_word=1; words++; }
+        }
+    }
+    printf("%6u %6u %6u\n", lines, words, bytes);
+    return 0;
+}
+
+static int do_sort(char *argv[], int argc) {
+    (void)argv; (void)argc;
+    char *lines[512]; int nlines=0;
+    static char buf[32768]; int total=0; int n;
+    while ((n = fread(0, buf+total, (uint32_t)(sizeof(buf)-total-1))) > 0) total+=n;
+    buf[total]=0;
+    char *p=buf;
+    while (*p && nlines<512) {
+        char *nl=strchr(p,'\n');
+        if (nl) *nl=0;
+        lines[nlines++]=p;
+        p = nl ? nl+1 : p+strlen(p);
+    }
+    qsort(lines,(size_t)nlines,sizeof(char*),(int(*)(const void*,const void*))strcmp);
+    for (int i=0;i<nlines;i++) { fputs(lines[i]); putchar('\n'); }
+    return 0;
+}
+
+static int do_uniq(char *argv[], int argc) {
+    (void)argv; (void)argc;
+    static char all[32768]; int total=0; int n;
+    while ((n = fread(0, all+total, (uint32_t)(sizeof(all)-total-1))) > 0) total+=n;
+    all[total]=0;
+    char prev[512]; prev[0]=0;
+    char *p=all;
+    while (*p) {
+        char *nl=strchr(p,'\n'); if (nl) *nl=0;
+        if (strcmp(p,prev)!=0) {
+            fputs(p); putchar('\n');
+            strncpy(prev,p,511);
+        }
+        p = nl ? nl+1 : p+strlen(p);
+    }
+    return 0;
+}
+
 static int do_cp(char *argv[], int argc) {
     if (argc < 3) { fputs("cp: cp <src> <dst>\n"); return 1; }
     int src = open(argv[1]);
@@ -260,6 +313,9 @@ static int run_pipeline(char *line) {
         if (!strcmp(cmd,"help"))    return do_help(argv,argc);
         if (!strcmp(cmd,"ls"))      return do_ls(argv,argc);
         if (!strcmp(cmd,"cat"))     return do_cat(argv,argc);
+        if (!strcmp(cmd,"wc"))      return do_wc(argv,argc);
+        if (!strcmp(cmd,"sort"))    return do_sort(argv,argc);
+        if (!strcmp(cmd,"uniq"))    return do_uniq(argv,argc);
         if (!strcmp(cmd,"cp"))      return do_cp(argv,argc);
         if (!strcmp(cmd,"rm"))      return do_rm(argv,argc);
         if (!strcmp(cmd,"cd"))      return do_cd(argv,argc);
@@ -290,6 +346,9 @@ static int run_pipeline(char *line) {
         if (!strcmp(cmd,"ls"))  ret=do_ls(argv,argc);
         else if (!strcmp(cmd,"cat")) ret=do_cat(argv,argc);
         else if (!strcmp(cmd,"echo")) ret=do_echo(argv,argc);
+        else if (!strcmp(cmd,"wc")) ret=do_wc(argv,argc);
+        else if (!strcmp(cmd,"sort")) ret=do_sort(argv,argc);
+        else if (!strcmp(cmd,"uniq")) ret=do_uniq(argv,argc);
         else ret=do_exec(cmd);
         (void)ret;
 
@@ -308,6 +367,9 @@ static int run_pipeline(char *line) {
         const char *cmd = argv[0];
         int ret = 0;
         if (!strcmp(cmd,"cat")) ret=do_cat(argv,argc);
+        else if (!strcmp(cmd,"wc")) ret=do_wc(argv,argc);
+        else if (!strcmp(cmd,"sort")) ret=do_sort(argv,argc);
+        else if (!strcmp(cmd,"uniq")) ret=do_uniq(argv,argc);
         else ret=do_exec(cmd);
         (void)ret;
 

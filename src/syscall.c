@@ -38,8 +38,8 @@ static uint32_t sc_write(uint32_t buf_addr, uint32_t len, uint32_t c) {
     if (buf_addr == 0 || buf_addr > 0x40100000) return (uint32_t)-1;
     if (len > 4096) len = 4096;
     const char *buf = (const char *)buf_addr;
-    for (uint32_t i = 0; i < len; i++) vga_putchar(buf[i]);
-    return len;
+    int n = vfs_write(1, buf, len);
+    return n < 0 ? 0 : (uint32_t)n;
 }
 
 static uint32_t sc_read(uint32_t buf_addr, uint32_t len, uint32_t c) {
@@ -87,7 +87,8 @@ static uint32_t sc_getkey(uint32_t a, uint32_t b, uint32_t c) {
 
 static uint32_t sc_putchar(uint32_t ch, uint32_t b, uint32_t c) {
     (void)b; (void)c;
-    vga_putchar((char)ch);
+    char ch8 = (char)ch;
+    vfs_write(1, &ch8, 1);
     return 0;
 }
 
