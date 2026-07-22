@@ -301,6 +301,13 @@ void gui_window(int x, int y, int w, int h, const char *title) {
 
     gui_rect_fill(x+w-11, y+1, 9, 9, C_RED);
     gui_puts(x+w-9, y+2, "X", C_WHITE, C_RED);
+
+    gui_rect_fill(x+w-22, y+1, 9, 9, C_BUTTON_HI);
+    gui_hline(x+w-20, y+6, 5, C_WHITE);
+
+    gui_line(x+w-6, y+h-2, x+w-2, y+h-6, C_WIN_BORDER);
+    gui_line(x+w-5, y+h-2, x+w-2, y+h-5, C_WIN_BORDER);
+    gui_line(x+w-4, y+h-2, x+w-2, y+h-4, C_WIN_BORDER);
 }
 
 void gui_button(int x, int y, int w, int h, const char *label, int pressed) {
@@ -361,7 +368,7 @@ typedef enum {
     WIN_CALC=3, WIN_EDITOR=4, WIN_COUNT=5
 } wintype_t;
 
-typedef struct { int active, x, y, w, h; } winrec_t;
+typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
 
 static winrec_t wins[WIN_COUNT];
 static int      zorder[WIN_COUNT];
@@ -391,7 +398,11 @@ static void wm_push_front(int t) {
     zorder[zcount++] = t;
 }
 
-static int wm_topmost(void) { return zcount ? zorder[zcount-1] : -1; }
+static int wm_topmost(void) {
+    for (int i=zcount-1;i>=0;i--)
+        if (!wins[zorder[i]].minimized) return zorder[i];
+    return -1;
+}
 
 static void files_refresh(void);
 
@@ -399,8 +410,11 @@ static void wm_open(int t, int defx, int defy, int defw, int defh) {
     if (!wins[t].active) {
         wins[t].active = 1;
         wins[t].x = defx; wins[t].y = defy; wins[t].w = defw; wins[t].h = defh;
+        wins[t].min_w = defw; wins[t].min_h = defh;
+        wins[t].minimized = 0;
         if (t == WIN_FILES) files_refresh();
     }
+    wins[t].minimized = 0;
     wm_push_front(t);
 }
 
@@ -427,9 +441,10 @@ void gui_draw_taskbar(void) {
         int t = zorder[i];
         if (!wins[t].active) continue;
         int tw = (int)kstrlen(win_title(t))*8 + 6;
-        uint8_t bg = (t==top) ? C_BUTTON_HI : C_TASKBAR;
+        uint8_t bg = (t==top && !wins[t].minimized) ? C_BUTTON_HI : C_TASKBAR;
+        uint8_t fg = wins[t].minimized ? C_LIGHT_GREY : C_WHITE;
         gui_rect_fill(tx, 0, tw, 9, bg);
-        gui_puts(tx+3, 1, win_title(t), C_WHITE, bg);
+        gui_puts(tx+3, 1, win_title(t), fg, bg);
         tb_tab_type[tb_tab_count]=t; tb_tab_x0[tb_tab_count]=tx; tb_tab_x1[tb_tab_count]=tx+tw;
         tb_tab_count++;
         tx += tw + 2;
@@ -1002,6 +1017,7 @@ void gui_run(void) {
 
     int prev_left = 0;
     int dragging = -1, drag_ox = 0, drag_oy = 0;
+    int resizing = -1, resize_ow = 0, resize_oh = 0, resize_mx = 0, resize_my = 0;
     int running = 1;
 
     while (running) {
@@ -1011,7 +1027,7 @@ void gui_run(void) {
         for (int i=0;i<zcount;i++) {
             int t = zorder[i];
             winrec_t *w = &wins[t];
-            if (!w->active) continue;
+            if (!w->active || w->minimized) continue;
             if (t==WIN_TERMINAL) render_terminal(w);
             else if (t==WIN_FILES) render_files(w);
             else if (t==WIN_SYSMON) render_sysmon(w);
@@ -1073,7 +1089,7 @@ void gui_run(void) {
             for (int i=zcount-1;i>=0 && hit<0;i--) {
                 int t = zorder[i];
                 winrec_t *w = &wins[t];
-                if (w->active && point_in(mx,my,w->x,w->y,w->w,w->h)) hit = t;
+                if (w->active && !w->minimized && point_in(mx,my,w->x,w->y,w->w,w->h)) hit = t;
             }
 
             if (hit >= 0) {
@@ -1082,9 +1098,14 @@ void gui_run(void) {
                 if (my < w->y+11) {
                     if (mx>=w->x+w->w-11 && mx<w->x+w->w-2) {
                         wm_close(hit);
+                    } else if (mx>=w->x+w->w-22 && mx<w->x+w->w-13) {
+                        w->minimized = 1;
                     } else {
                         dragging = hit; drag_ox = mx-w->x; drag_oy = my-w->y;
                     }
+                } else if (mx>=w->x+w->w-8 && mx<w->x+w->w && my>=w->y+w->h-8 && my<w->y+w->h) {
+                    resizing = hit; resize_ow = w->w; resize_oh = w->h;
+                    resize_mx = mx; resize_my = my;
                 } else if (hit == WIN_FILES) {
                     files_handle_click(w, mx, my);
                 } else if (hit == WIN_CALC) {
@@ -1094,7 +1115,7 @@ void gui_run(void) {
                 }
             } else if (my < 10) {
                 int th = taskbar_hit(mx, my);
-                if (th >= 0) wm_push_front(th);
+                if (th >= 0) { wins[th].minimized = 0; wm_push_front(th); }
             } else if (mx < 45 && my >= ICON_START_Y) {
                 int iconidx = (my-ICON_START_Y)/ICON_SLOT;
                 if (iconidx==0)      wm_open(WIN_TERMINAL, 40, 14, TERM_W, TERM_H);
@@ -1116,6 +1137,18 @@ void gui_run(void) {
             w->x = nx; w->y = ny;
         }
         if (!left_now) dragging = -1;
+
+        if (left_now && resizing >= 0) {
+            winrec_t *w = &wins[resizing];
+            int nw = resize_ow + (mx - resize_mx);
+            int nh = resize_oh + (my - resize_my);
+            if (nw < w->min_w) nw = w->min_w;
+            if (nh < w->min_h) nh = w->min_h;
+            if (w->x+nw > GUI_WIDTH)  nw = GUI_WIDTH  - w->x;
+            if (w->y+nh > GUI_HEIGHT) nh = GUI_HEIGHT - w->y;
+            w->w = nw; w->h = nh;
+        }
+        if (!left_now) resizing = -1;
 
         prev_left = left_now;
 
