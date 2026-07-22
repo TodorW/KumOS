@@ -64,6 +64,8 @@ run-serial: iso ext2.img
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
 	    -boot order=d -cdrom kumos.iso -hda disk.img -hdb ext2.img -m 128M -vga std -no-reboot \
 	    -serial stdio
+test: iso ext2.img
+	@./smoke_test.sh
 clean:
 	@rm -f $(KERN_OBJS) $(PKG_BLOBS) kumos.bin kumos.iso iso/boot/kumos.bin user/*.elf
-.PHONY: all iso run run-net run-serial clean user-programs
+.PHONY: all iso run run-net run-serial test clean user-programs
