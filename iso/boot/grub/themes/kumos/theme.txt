@@ -1,0 +1,79 @@
+# KumOS GRUB theme
+
+title-text: ""
+desktop-image: "background.png"
+desktop-color: "#070b14"
+
++ vbox {
+    top = 30%
+    left = 12%
+    width = 76%
+    height = 65%
+
+    + label {
+        text = "GNU GRUB"
+        font = "KumOS Title"
+        color = "#f4f6fb"
+        align = "center"
+    }
+
+    + vbox { height = 6 }
+
+    + label {
+        text = "KumOS bootloader"
+        font = "KumOS Text"
+        color = "#7f90ac"
+        align = "center"
+    }
+
+    + vbox { height = 10 }
+
+    + image {
+        file = "accent_line.png"
+        width = 220
+        height = 2
+        align = "center"
+    }
+
+    + vbox { height = 26 }
+
+    + boot_menu {
+        left = 2%
+        width = 96%
+        height = 220
+        item_height = 54
+        item_padding = 10
+        item_spacing = 12
+        item_icon_space = 16
+        icon_width = 32
+        icon_height = 32
+        icon_dir = "icons"
+        item_font = "KumOS Menu"
+        selected_item_font = "KumOS Menu"
+        item_color = "#c3cede"
+        selected_item_color = "#ffffff"
+        selected_item_pixmap_style = "select_*.png"
+    }
+
+    + vbox { height = 30 }
+
+    + hbox {
+        + label {
+            text = "up/down  select"
+            font = "KumOS Text"
+            color = "#5b6c88"
+        }
+        + hbox { width = 40 }
+        + label {
+            text = "enter  boot"
+            font = "KumOS Text"
+            color = "#5b6c88"
+        }
+        + hbox { width = 40 }
+        + label {
+            text = "e  edit    c  command line"
+            font = "KumOS Text"
+            color = "#5b6c88"
+        }
+    }
+}

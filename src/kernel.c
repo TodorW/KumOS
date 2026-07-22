@@ -82,46 +82,39 @@ static void zpad2(uint32_t v, char *out) {
 }
 
 static void statusbar_seg(int *x, const char *text, vga_color fg) {
-    vga_puts_at(text, *x, 0, fg, VGA_BLUE);
-    *x += (int)kstrlen(text);
-    char sep[2] = { (char)VGA_CH_VLINE, 0 };
-    vga_puts_at(sep, *x, 0, VGA_LIGHT_BLUE, VGA_BLUE);
-    *x += 2;
+    vga_puts_at(text, *x, 0, fg, VGA_DARK_GREY);
+    *x += (int)kstrlen(text) + 2;
 }
 
 static void draw_statusbar(void) {
-    vga_fill_rect(0,0,80,1,' ',VGA_WHITE,VGA_BLUE);
+    vga_fill_rect(0,0,80,1,' ',VGA_WHITE,VGA_DARK_GREY);
 
-    /* fade-in accent on the far left, powerline-style */
-    vga_puts_at("\xB0",0,0,VGA_BLUE,VGA_BLACK);
-    vga_puts_at("\xB1",1,0,VGA_BLUE,VGA_BLACK);
-    vga_puts_at("\xB2",2,0,VGA_BLUE,VGA_BLACK);
-
-    int x = 4;
-    statusbar_seg(&x, " KumOS ", VGA_WHITE);
+    const char *badge = " \x01 KumOS ";
+    vga_puts_at(badge, 0, 0, VGA_WHITE, VGA_LIGHT_CYAN);
+    int x = (int)kstrlen(badge) + 2;
 
     uint32_t secs = timer_seconds();
-    char ubuf[20] = " up ", num[12];
+    char ubuf[20] = "up ", num[12];
     kitoa(secs/3600, num, 10); kstrcat(ubuf, num); kstrcat(ubuf, "h");
-    char mm[3]; zpad2((secs/60)%60, mm); kstrcat(ubuf, mm); kstrcat(ubuf, "m ");
+    char mm[3]; zpad2((secs/60)%60, mm); kstrcat(ubuf, mm); kstrcat(ubuf, "m");
     statusbar_seg(&x, ubuf, VGA_LIGHT_GREEN);
 
     task_t *t = sched_current();
-    char tbuf[40] = " "; kstrcat(tbuf, t->name); kstrcat(tbuf, " ");
-    statusbar_seg(&x, tbuf, VGA_LIGHT_CYAN);
+    char tbuf[40]; kstrcpy(tbuf, t->name);
+    statusbar_seg(&x, tbuf, VGA_LIGHT_MAGENTA);
 
-    char mb[16] = " mem "; char kb[12];
-    kitoa(kmalloc_used()/1024, kb, 10); kstrcat(mb, kb); kstrcat(mb, "K ");
+    char mb[16] = "mem "; char kb[12];
+    kitoa(kmalloc_used()/1024, kb, 10); kstrcat(mb, kb); kstrcat(mb, "K");
     statusbar_seg(&x, mb, VGA_YELLOW);
 
-    char modebuf[8]; kstrcpy(modebuf, kum_active ? " root " : " user ");
-    vga_puts_at(modebuf, x, 0, kum_active?VGA_LIGHT_RED:VGA_LIGHT_GREY, VGA_BLUE);
+    vga_puts_at(kum_active ? "root" : "user", x, 0,
+                kum_active?VGA_LIGHT_RED:VGA_LIGHT_BLUE, VGA_DARK_GREY);
 
     rtc_time_t now = rtc_read();
     char clk[10]; char hh[3], mi[3], ss[3];
     zpad2(now.hour,hh); zpad2(now.minute,mi); zpad2(now.second,ss);
     kstrcpy(clk, hh); kstrcat(clk,":"); kstrcat(clk,mi); kstrcat(clk,":"); kstrcat(clk,ss);
-    vga_puts_at(clk, 80 - (int)kstrlen(clk) - 1, 0, VGA_WHITE, VGA_BLUE);
+    vga_puts_at(clk, 80 - (int)kstrlen(clk) - 1, 0, VGA_WHITE, VGA_DARK_GREY);
 
     /* row 0 is reserved for this bar; push the cursor below it if nothing
        has been printed there yet (fresh boot / just after `clear`) */
@@ -166,19 +159,16 @@ static void print_prompt(void) {
     vga_color accent = kum_active ? VGA_LIGHT_RED : VGA_LIGHT_GREEN;
 
     vga_set_color(VGA_DARK_GREY,VGA_BLACK);
-    vga_putchar((char)VGA_CH_TL); vga_putchar((char)VGA_CH_HLINE);
     vga_putchar('(');
     vga_set_color(accent,VGA_BLACK);
     vga_puts(kum_active?"root":"user");
     vga_set_color(VGA_WHITE,VGA_BLACK); vga_putchar('@');
     vga_set_color(VGA_LIGHT_CYAN,VGA_BLACK); vga_puts(hostname);
     vga_set_color(VGA_DARK_GREY,VGA_BLACK); vga_putchar(')');
-    vga_putchar((char)VGA_CH_HLINE); vga_putchar('[');
+    vga_putchar(' ');
     vga_set_color(VGA_YELLOW,VGA_BLACK); vga_putchar('~');
-    vga_set_color(VGA_DARK_GREY,VGA_BLACK); vga_putchar(']');
     vga_putchar('\n');
 
-    vga_putchar((char)VGA_CH_BL); vga_putchar((char)VGA_CH_HLINE);
     vga_set_color(accent,VGA_BLACK);
     vga_putchar(kum_active?'#':'$');
     vga_set_color(VGA_WHITE,VGA_BLACK);
@@ -212,6 +202,25 @@ static int calc_parse(const char *e) {
     switch(op){case '+':return a+b;case '-':return a-b;
                case '*':return a*b;case '/':return b?a/b:0;
                case '%':return b?a%b:0;} return 0;
+}
+
+static void vga_puts_glyph(const char *s, vga_color fg) {
+    vga_set_color(fg, VGA_BLACK);
+    while (*s) {
+        vga_putchar(*s == '#' ? (char)VGA_CH_BLOCK : *s);
+        s++;
+    }
+}
+
+static void draw_welcome_logo(void) {
+    vga_puts_glyph("              ##    ## ##     ## ##     ##  #######   ######  \n", VGA_LIGHT_CYAN);
+    vga_puts_glyph("              ##   ##  ##     ## ###   ### ##     ## ##    ## \n", VGA_LIGHT_CYAN);
+    vga_puts_glyph("              ##  ##   ##     ## #### #### ##     ## ##       \n", VGA_CYAN);
+    vga_puts_glyph("              #####    ##     ## ## ### ## ##     ##  ######  \n", VGA_CYAN);
+    vga_puts_glyph("              ##  ##   ##     ## ##     ## ##     ##       ## \n", VGA_CYAN);
+    vga_puts_glyph("              ##   ##  ##     ## ##     ## ##     ## ##    ## \n", VGA_CYAN);
+    vga_puts_glyph("              ##    ##  #######  ##     ##  #######   ######  \n", VGA_DARK_GREY);
+    vga_putchar('\n');
 }
 
 static void cmd_logo(void) {
@@ -1261,12 +1270,14 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
     draw_splash();
     vga_clear();
     draw_statusbar();
+    vga_goto(2, 0);
+    draw_welcome_logo();
 
     vga_set_color(VGA_CYAN,VGA_BLACK);
     fs_file_t *motd = fs_find("motd.txt");
     if (motd) vga_puts(motd->data);
     vga_set_color(VGA_LIGHT_GREY,VGA_BLACK);
-    kprintf("  KumOS v1.8  |  RAM: %u KB  |  VFS+Net+Signals+kush\n",total_mem_kb);
+    kprintf("  KumOS v1.9  |  RAM: %u KB  |  VFS+Net+Signals+kush+ext2\n",total_mem_kb);
     serial_printf("[boot] Shell started. Type commands below.\r\n");
     serial_printf("----------------------------------------\r\n");
     vga_puts("  Type 'help' for commands. 'irqinfo' to see interrupt status.\n");

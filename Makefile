@@ -47,22 +47,23 @@ user/%.elf: user/%.c
 	@strip $@
 user-programs: $(USER_PROGS)
 iso: kumos.bin
-	@mkdir -p iso/boot/grub
+	@mkdir -p iso/boot/grub/themes/kumos
 	@cp kumos.bin iso/boot/kumos.bin && cp grub.cfg iso/boot/grub/grub.cfg
+	@cp -r grub-theme/* iso/boot/grub/themes/kumos/
 	@$(GRUB_MKR) -o kumos.iso iso/ 2>/dev/null
 	@echo "ISO: $$(ls -lh kumos.iso | awk '{print $$5}')"
 ext2.img:
 	@dd if=/dev/zero of=$@ bs=1M count=8 status=none
 run: iso ext2.img
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
-	    -boot order=d -cdrom kumos.iso -hda disk.img -hdb ext2.img -m 128M -vga std -no-reboot
+	    -boot order=d -cdrom kumos.iso -drive file=disk.img,format=raw,if=ide -drive file=ext2.img,format=raw,if=ide -m 128M -vga std -no-reboot
 run-net: iso ext2.img
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
-	    -boot order=d -cdrom kumos.iso -hda disk.img -hdb ext2.img -m 128M -vga std -no-reboot \
+	    -boot order=d -cdrom kumos.iso -drive file=disk.img,format=raw,if=ide -drive file=ext2.img,format=raw,if=ide -m 128M -vga std -no-reboot \
 	    -nic user
 run-serial: iso ext2.img
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
-	    -boot order=d -cdrom kumos.iso -hda disk.img -hdb ext2.img -m 128M -vga std -no-reboot \
+	    -boot order=d -cdrom kumos.iso -drive file=disk.img,format=raw,if=ide -drive file=ext2.img,format=raw,if=ide -m 128M -vga std -no-reboot \
 	    -serial stdio
 test: iso ext2.img
 	@./smoke_test.sh

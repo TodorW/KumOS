@@ -7,7 +7,7 @@ cp disk.img "$DISK"
 
 timeout 20s qemu-system-x86_64 \
     $([ -r /dev/kvm ] && echo "-enable-kvm") \
-    -boot order=d -cdrom kumos.iso -hda "$DISK" -hdb ext2.img \
+    -boot order=d -cdrom kumos.iso -drive file="$DISK",format=raw,if=ide -drive file=ext2.img,format=raw,if=ide \
     -m 128M -display none -serial file:"$LOG" -no-reboot >/dev/null 2>&1
 
 rm -f "$DISK"
