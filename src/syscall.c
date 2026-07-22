@@ -33,7 +33,7 @@ static uint32_t sc_exit(uint32_t code, uint32_t b, uint32_t c) {
 static uint32_t sc_write(uint32_t buf_addr, uint32_t len, uint32_t c) {
     (void)c;
 
-    if (buf_addr == 0 || buf_addr > 0x20000000) return (uint32_t)-1;
+    if (buf_addr == 0 || buf_addr > 0x40100000) return (uint32_t)-1;
     if (len > 4096) len = 4096;
     const char *buf = (const char *)buf_addr;
     for (uint32_t i = 0; i < len; i++) vga_putchar(buf[i]);

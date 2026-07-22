@@ -1,6 +1,6 @@
 GCC_INC := $(shell find /usr/lib/gcc -name "stddef.h" 2>/dev/null | head -1 | xargs dirname)
 CC       = gcc
-CFLAGS   = -m32 -ffreestanding -O2 -Wall -fno-stack-protector -fno-builtin \
+CFLAGS   = -m32 -g -ffreestanding -O2 -Wall -fno-stack-protector -fno-builtin \
            -mno-sse -mno-sse2 -mno-mmx -mno-80387 -mgeneral-regs-only \
            -nostdlib -nostdinc -I$(GCC_INC) -Isrc
 ASM      = nasm
