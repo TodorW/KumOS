@@ -131,7 +131,9 @@ void ata_init(void) {
         ata_soft_reset();
         if (ata_identify(0, &drives[0]) == 0) break;
     }
-    ata_identify(1, &drives[1]);
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (ata_identify(1, &drives[1]) == 0) break;
+    }
 }
 
 ata_drive_t *ata_get(int drive) {
