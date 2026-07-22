@@ -21,6 +21,8 @@
 #include <stdint.h>
 
 extern void isr128(void);
+extern void user_entry_trampoline(void);
+extern void switch_context(uint32_t *old_esp, uint32_t new_esp);
 
 static uint32_t sc_exit(uint32_t code, uint32_t b, uint32_t c) {
     (void)b; (void)c;
@@ -338,10 +340,14 @@ static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_
     *--ksp = r2.entry;
     for(int j=0;j<8;j++) *--ksp = 0;
     *--ksp = 0x23;
-    *--ksp = 0; *--ksp = 0;
+    *--ksp = (uint32_t)(uintptr_t)user_entry_trampoline;
+    *--ksp = 0; *--ksp = 0; *--ksp = 0; *--ksp = 0;
 
     cur->esp = (uint32_t)(uintptr_t)ksp;
     (void)sp;
+
+    uint32_t discard_esp;
+    switch_context(&discard_esp, cur->esp);
     return 0;
 }
 
