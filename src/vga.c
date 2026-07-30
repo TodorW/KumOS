@@ -8,6 +8,48 @@ static int terminal_row;
 static int terminal_col;
 static uint8_t terminal_color;
 
+/* Minimal ANSI/VT100 CSI parser: colors (SGR), cursor positioning,
+   clear screen/line. Just enough for real terminal output (kush's own
+   prompt already emits \033[32m-style codes that used to render as
+   literal garbage since nothing ever interpreted them). */
+#define ANSI_MAX_PARAMS 8
+static int     ansi_esc_state = 0;   /* 0=normal, 1=saw ESC, 2=in CSI */
+static int     ansi_params[ANSI_MAX_PARAMS];
+static int     ansi_nparams = 0;
+static uint8_t ansi_fg = VGA_LIGHT_GREY;
+static uint8_t ansi_bg = VGA_BLACK;
+static int     ansi_bold = 0;
+
+static const uint8_t ansi_color_map[8] = {
+    VGA_BLACK, VGA_RED, VGA_GREEN, VGA_BROWN,
+    VGA_BLUE, VGA_MAGENTA, VGA_CYAN, VGA_LIGHT_GREY
+};
+static const uint8_t ansi_bright_color_map[8] = {
+    VGA_DARK_GREY, VGA_LIGHT_RED, VGA_LIGHT_GREEN, VGA_YELLOW,
+    VGA_LIGHT_BLUE, VGA_LIGHT_MAGENTA, VGA_LIGHT_CYAN, VGA_WHITE
+};
+
+static void ansi_apply_sgr(void) {
+    if (ansi_nparams == 0 || (ansi_nparams == 1 && ansi_params[0] == 0)) {
+        ansi_fg = VGA_LIGHT_GREY; ansi_bg = VGA_BLACK; ansi_bold = 0;
+        vga_set_color((vga_color)ansi_fg, (vga_color)ansi_bg);
+        return;
+    }
+    for (int i = 0; i < ansi_nparams; i++) {
+        int p = ansi_params[i];
+        if (p == 0) { ansi_fg = VGA_LIGHT_GREY; ansi_bg = VGA_BLACK; ansi_bold = 0; }
+        else if (p == 1) ansi_bold = 1;
+        else if (p == 22) ansi_bold = 0;
+        else if (p >= 30 && p <= 37) ansi_fg = ansi_bold ? ansi_bright_color_map[p-30] : ansi_color_map[p-30];
+        else if (p == 39) ansi_fg = VGA_LIGHT_GREY;
+        else if (p >= 40 && p <= 47) ansi_bg = ansi_color_map[p-40];
+        else if (p == 49) ansi_bg = VGA_BLACK;
+        else if (p >= 90 && p <= 97) ansi_fg = ansi_bright_color_map[p-90];
+        else if (p >= 100 && p <= 107) ansi_bg = ansi_bright_color_map[p-100];
+    }
+    vga_set_color((vga_color)ansi_fg, (vga_color)ansi_bg);
+}
+
 static uint16_t vga_entry(char c, uint8_t color) {
     return (uint16_t)(uint8_t)c | ((uint16_t)color << 8);
 }
@@ -58,6 +100,48 @@ void vga_scroll(void) {
 }
 
 void vga_putchar(char c) {
+    if (ansi_esc_state == 1) {
+        if (c == '[') { ansi_esc_state = 2; ansi_nparams = 0; ansi_params[0] = 0; }
+        else ansi_esc_state = 0;
+        return;
+    }
+    if (ansi_esc_state == 2) {
+        if (c >= '0' && c <= '9') {
+            if (ansi_nparams == 0) { ansi_nparams = 1; ansi_params[0] = 0; }
+            ansi_params[ansi_nparams-1] = ansi_params[ansi_nparams-1]*10 + (c-'0');
+        } else if (c == ';') {
+            if (ansi_nparams < ANSI_MAX_PARAMS) { ansi_nparams++; ansi_params[ansi_nparams-1] = 0; }
+        } else {
+            if (ansi_nparams == 0) { ansi_nparams = 1; ansi_params[0] = 0; }
+            switch (c) {
+                case 'm': ansi_apply_sgr(); break;
+                case 'H': case 'f': {
+                    int row = ansi_params[0] ? ansi_params[0] : 1;
+                    int col = (ansi_nparams > 1 && ansi_params[1]) ? ansi_params[1] : 1;
+                    if (row > VGA_HEIGHT) row = VGA_HEIGHT;
+                    if (col > VGA_WIDTH)  col = VGA_WIDTH;
+                    vga_goto(row-1, col-1);
+                    break;
+                }
+                case 'J':
+                    vga_clear();
+                    break;
+                case 'K':
+                    vga_fill_rect(terminal_col, terminal_row, VGA_WIDTH-terminal_col, 1,
+                                  ' ', (vga_color)ansi_fg, (vga_color)ansi_bg);
+                    break;
+                case 'A': { int n=ansi_params[0]?ansi_params[0]:1; int r=terminal_row-n; if(r<0)r=0; vga_goto(r, terminal_col); break; }
+                case 'B': { int n=ansi_params[0]?ansi_params[0]:1; int r=terminal_row+n; if(r>=VGA_HEIGHT)r=VGA_HEIGHT-1; vga_goto(r, terminal_col); break; }
+                case 'C': { int n=ansi_params[0]?ansi_params[0]:1; int cc=terminal_col+n; if(cc>=VGA_WIDTH)cc=VGA_WIDTH-1; vga_goto(terminal_row, cc); break; }
+                case 'D': { int n=ansi_params[0]?ansi_params[0]:1; int cc=terminal_col-n; if(cc<0)cc=0; vga_goto(terminal_row, cc); break; }
+                default: break;
+            }
+            ansi_esc_state = 0;
+        }
+        return;
+    }
+    if ((uint8_t)c == 27) { ansi_esc_state = 1; return; }
+
     if (c == '\n') {
         terminal_col = 0;
         if (++terminal_row >= VGA_HEIGHT)
