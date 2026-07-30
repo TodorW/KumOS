@@ -287,20 +287,41 @@ static void cmd_vmem(void) {
 }
 
 static void cmd_https(const char *args) {
-    char host[64], path[192];
-    split_cmd(args, host, path, 64);
-    if (!*host) { vga_puts("Usage: https <host> [path]\n"); return; }
+    char hostport[64], path[192];
+    split_cmd(args, hostport, path, 64);
+    if (!*hostport) { vga_puts("Usage: https <host>[:port] [path]\n"); return; }
     if (!*path) kstrcpy(path, "/");
 
     uint32_t ip; uint16_t port = 443;
-    if (kstrcmp(host, "local") == 0) {
-        ip = NET_IP(10,0,2,2); port = 8443;
-        vga_puts("(debug) using local test server 10.0.2.2:8443\n");
+    char http_host[64];   /* goes in the HTTP Host: header either way */
+    char sni_host[64];    /* SNI extension - empty for a raw IP target */
+
+    /* a bare dotted IP (with an optional :port) skips DNS entirely - lets
+       you point at a repo/test server directly, e.g. "https 10.0.2.2:8443" */
+    if (pkgnet_parse_addr(hostport, &ip, &port) == 0) {
+        if (kstrchr(hostport, ':') == 0) port = 443;   /* no :port given, don't inherit pkgnet's default 8080 */
+        kprintf("  -> %u.%u.%u.%u:%u (no DNS needed)\n",
+                (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF, port);
+        kstrcpy(http_host, hostport);
+        sni_host[0] = 0;
     } else {
-        vga_puts("Resolving "); vga_puts(host); vga_puts("...\n");
-        ip = dns_resolve(host);
+        char *colon = kstrchr(hostport, ':');
+        if (colon) {
+            int n = (int)(colon - hostport);
+            for (int i = 0; i < n && i < 63; i++) http_host[i] = hostport[i];
+            http_host[n < 63 ? n : 63] = 0;
+            uint32_t p = 0; const char *pp = colon + 1;
+            while (*pp >= '0' && *pp <= '9') { p = p*10 + (uint32_t)(*pp - '0'); pp++; }
+            if (p > 0 && p <= 65535) port = (uint16_t)p;
+        } else {
+            kstrcpy(http_host, hostport);
+        }
+
+        vga_puts("Resolving "); vga_puts(http_host); vga_puts("...\n");
+        ip = dns_resolve(http_host);
         if (!ip) { vga_puts("https: DNS resolution failed\n"); return; }
-        kprintf("  -> %u.%u.%u.%u\n", (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF);
+        kprintf("  -> %u.%u.%u.%u:%u\n", (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF, port);
+        kstrcpy(sni_host, http_host);
     }
 
     vga_puts("TLS handshake (TLS_RSA_WITH_AES_128_CBC_SHA)...\n");
@@ -309,7 +330,7 @@ static void cmd_https(const char *args) {
        allocated rather than a local. */
     tls_conn_t *tls = (tls_conn_t*)kmalloc(sizeof(tls_conn_t));
     if (!tls) { vga_puts("https: out of memory\n"); return; }
-    if (tls_connect(tls, ip, port, host) != 0) {
+    if (tls_connect(tls, ip, port, sni_host) != 0) {
         vga_puts("https: TLS handshake failed (no cert-chain validation is done here -\n");
         vga_puts("       real encryption, not real authentication - see README)\n");
         kfree(tls);
@@ -319,7 +340,7 @@ static void cmd_https(const char *args) {
 
     char req[256];
     kstrcpy(req, "GET "); kstrcat(req, path);
-    kstrcat(req, " HTTP/1.0\r\nHost: "); kstrcat(req, host);
+    kstrcat(req, " HTTP/1.0\r\nHost: "); kstrcat(req, http_host);
     kstrcat(req, "\r\nConnection: close\r\n\r\n");
     tls_send(tls, req, (uint32_t)kstrlen(req));
 
