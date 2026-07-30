@@ -175,6 +175,24 @@ static int do_cp(char *argv[], int argc) {
     return 0;
 }
 
+static int do_mv(char *argv[], int argc) {
+    if (argc < 3) { fputs("mv: mv <src> <dst>\n"); return 1; }
+    int src = open(argv[1]);
+    if (src < 0) { printf("mv: %s: not found\n", argv[1]); return 1; }
+
+    char dst_path[128] = "/disk/";
+    strcat(dst_path, argv[2]);
+    int dst = _syscall(SYS_OPEN, (int)dst_path, O_WRONLY|O_CREAT|O_TRUNC, 0);
+    if (dst < 0) { close(src); printf("mv: can't create %s\n", argv[2]); return 1; }
+    char buf[512]; int n;
+    while ((n=fread(src,buf,512))>0) _syscall(SYS_FWRITE,dst,(int)buf,(int)n);
+    close(src); close(dst);
+
+    if (sys_unlink(argv[1]) != 0) { printf("mv: copied but couldn't remove %s\n", argv[1]); return 1; }
+    printf("Moved %s -> %s\n", argv[1], argv[2]);
+    return 0;
+}
+
 static int do_rm(char *argv[], int argc) {
     if (argc < 2) { fputs("rm: need filename\n"); return 1; }
     if (sys_unlink(argv[1]) == 0) { printf("Deleted %s\n", argv[1]); return 0; }
@@ -259,6 +277,9 @@ static int do_help(char *argv[], int argc) {
     fputs("    ls [path]         - List files\n");
     fputs("    cat <file>        - Print file\n");
     fputs("    cp <src> <dst>    - Copy file\n");
+    fputs("    mv <src> <dst>    - Move/rename file\n");
+    fputs("    set               - List shell variables\n");
+    fputs("    NAME=value        - Set a shell variable ($NAME to use it)\n");
     fputs("    rm <file>         - Delete file\n");
     fputs("    write <f> <data>  - Write text to file\n");
     fputs("    cd [path]         - Change directory\n");
@@ -288,13 +309,145 @@ static int do_exec(const char *cmd) {
 
     if (!strchr(upper, '.')) { strcat(upper, ".ELF"); }
 
+    /* NOTE: this replaces kush itself (real execve, no fork) - a genuine
+       fork()+exec()+wait() was attempted here but hit a deep, pre-existing
+       kernel bug: paging_clone_dir() aliases (doesn't deep-copy) page
+       directory entries below 1GB on the assumption that region is
+       kernel-only, but user ELF code actually loads at 0x400000 - well
+       within that "shared" range. A forked child's execve() then
+       overwrites the same physical pages as its parent's code, so the
+       parent resumes executing garbage. A real fix needs page-table-level
+       (not just page-directory-level) granularity in paging_clone_dir()/
+       paging_free_user() to separate user code from the shared kernel
+       heap that lives in the same 4MB region - left for a follow-up
+       session rather than shipping something that hangs/crashes. */
     int r = sys_exec(upper);
     if (r < 0) { printf("kush: %s: not found\n", cmd); return 127; }
     return r;
 }
 
 static int run_script(const char *filename);
+static void do_set(void);
+
+static int dispatch_one(char *argv[], int argc) {
+    const char *cmd = argv[0];
+    if (!strcmp(cmd,"exit")){exit(argc>1?atoi(argv[1]):0);}
+    if (!strcmp(cmd,"set")) { do_set(); return 0; }
+    if (!strcmp(cmd,"source")||!strcmp(cmd,".")) {
+        if(argc>1) return run_script(argv[1]);
+        puts("source: need filename"); return 1;
+    }
+    if (!strcmp(cmd,"help"))    return do_help(argv,argc);
+    if (!strcmp(cmd,"ls"))      return do_ls(argv,argc);
+    if (!strcmp(cmd,"cat"))     return do_cat(argv,argc);
+    if (!strcmp(cmd,"wc"))      return do_wc(argv,argc);
+    if (!strcmp(cmd,"sort"))    return do_sort(argv,argc);
+    if (!strcmp(cmd,"uniq"))    return do_uniq(argv,argc);
+    if (!strcmp(cmd,"cp"))      return do_cp(argv,argc);
+    if (!strcmp(cmd,"mv"))      return do_mv(argv,argc);
+    if (!strcmp(cmd,"rm"))      return do_rm(argv,argc);
+    if (!strcmp(cmd,"cd"))      return do_cd(argv,argc);
+    if (!strcmp(cmd,"pwd"))     return do_pwd(argv,argc);
+    if (!strcmp(cmd,"stat"))    return do_stat(argv,argc);
+    if (!strcmp(cmd,"echo"))    return do_echo(argv,argc);
+    if (!strcmp(cmd,"date"))    return do_date(argv,argc);
+    if (!strcmp(cmd,"history")) return do_history(argv,argc);
+    if (!strcmp(cmd,"write"))   return do_write(argv,argc);
+    if (!strcmp(cmd,"kill"))    return do_kill(argv,argc);
+    if (!strcmp(cmd,"clear"))   { fputs("\033[2J\033[H"); return 0; }
+    return do_exec(cmd);
+}
+
+/* Strips >, >>, < tokens (and their filename argument) out of argv,
+   compacting the remaining args in place. Requires whitespace around the
+   operator, same as split()'s space-only tokenizing - "cmd>file" with no
+   spaces isn't recognized, only "cmd > file". */
+static void parse_redir(char *argv[], int *argc, char **out_file, int *append, char **in_file) {
+    int j = 0;
+    for (int i = 0; i < *argc; i++) {
+        if (!strcmp(argv[i], ">") && i+1 < *argc)       { *out_file = argv[++i]; *append = 0; }
+        else if (!strcmp(argv[i], ">>") && i+1 < *argc) { *out_file = argv[++i]; *append = 1; }
+        else if (!strcmp(argv[i], "<") && i+1 < *argc)  { *in_file  = argv[++i]; }
+        else argv[j++] = argv[i];
+    }
+    argv[j] = 0;
+    *argc = j;
+}
+
+/* Shell variables: VAR=value assignment + $VAR expansion. This is the
+   scoped-down piece of "scripting" that landed - real control flow
+   (if/for/while) would need a proper parser/interpreter and didn't fit
+   in the time available this round. */
+#define KUSH_MAX_VARS 16
+#define KUSH_VAR_NAME 32
+#define KUSH_VAR_VAL  192
+static char var_names[KUSH_MAX_VARS][KUSH_VAR_NAME];
+static char var_vals[KUSH_MAX_VARS][KUSH_VAR_VAL];
+static int  nvars = 0;
+
+static int is_var_char(char c) { return (c>='A'&&c<='Z')||(c>='a'&&c<='z')||(c>='0'&&c<='9')||c=='_'; }
+
+static const char *var_get(const char *name, int len) {
+    for (int i=0;i<nvars;i++) {
+        int j=0; while (j<len && var_names[i][j]==name[j]) j++;
+        if (j==len && var_names[i][j]==0) return var_vals[i];
+    }
+    return 0;
+}
+
+static void var_set(const char *name, int len, const char *val) {
+    if (len >= KUSH_VAR_NAME) len = KUSH_VAR_NAME-1;
+    for (int i=0;i<nvars;i++) {
+        int j=0; while (j<len && var_names[i][j]==name[j]) j++;
+        if (j==len && var_names[i][j]==0) { strncpy(var_vals[i], val, KUSH_VAR_VAL-1); var_vals[i][KUSH_VAR_VAL-1]=0; return; }
+    }
+    if (nvars < KUSH_MAX_VARS) {
+        strncpy(var_names[nvars], name, len); var_names[nvars][len]=0;
+        strncpy(var_vals[nvars], val, KUSH_VAR_VAL-1); var_vals[nvars][KUSH_VAR_VAL-1]=0;
+        nvars++;
+    }
+}
+
+static void do_set(void) {
+    for (int i=0;i<nvars;i++) printf("%s=%s\n", var_names[i], var_vals[i]);
+}
+
+/* NAME=value with no spaces around '=' - consumes the whole line as an
+   assignment (not dispatched as a command) if it matches. */
+static int try_assign(const char *line) {
+    const char *p = line;
+    if (!(( *p>='A'&&*p<='Z')||(*p>='a'&&*p<='z')||*p=='_')) return 0;
+    const char *start = p;
+    while (is_var_char(*p)) p++;
+    if (*p != '=' || p == start) return 0;
+    int len = (int)(p-start);
+    var_set(start, len, p+1);
+    return 1;
+}
+
+static void expand_vars(const char *in, char *out, int outmax) {
+    int oi = 0;
+    for (int i=0; in[i] && oi<outmax-1; ) {
+        if (in[i]=='$' && is_var_char(in[i+1]) && !(in[i+1]>='0'&&in[i+1]<='9')) {
+            int j = i+1;
+            while (is_var_char(in[j])) j++;
+            const char *val = var_get(in+i+1, j-(i+1));
+            if (val) for (int k=0; val[k] && oi<outmax-1; k++) out[oi++] = val[k];
+            i = j;
+        } else {
+            out[oi++] = in[i++];
+        }
+    }
+    out[oi] = 0;
+}
+
 static int run_pipeline(char *line) {
+
+    if (try_assign(line)) return 0;
+
+    char expanded[CMD_MAX];
+    expand_vars(line, expanded, CMD_MAX);
+    line = expanded;
 
     char *parts[8]; int nparts = 0;
     char *p = line;
@@ -308,30 +461,47 @@ static int run_pipeline(char *line) {
 
         char *argv[ARG_MAX]; int argc = split(parts[0], argv, ARG_MAX);
         if (!argc) return 0;
-        const char *cmd = argv[0];
-        if (!strcmp(cmd,"exit")){exit(argc>1?atoi(argv[1]):0);}
-        if (!strcmp(cmd,"source")||!strcmp(cmd,".")) {
-            if(argc>1) return run_script(argv[1]);
-            puts("source: need filename"); return 1;
+
+        char *out_file = 0, *in_file = 0; int append = 0;
+        parse_redir(argv, &argc, &out_file, &append, &in_file);
+        if (!argc) return 0;
+
+        /* vfs_dup2() only refcounts pipes, not regular files - closing
+           the original fd right after dup2'ing it onto 1/0 (the way the
+           pipe code below does) frees the underlying FAT12 file handle
+           the dup'd descriptor still depends on, so every write after
+           that silently goes nowhere (file gets created via O_CREAT but
+           stays 0 bytes). Fix: keep the original fd open until *after*
+           fd 1/0 have been restored to their saved values, so it's no
+           longer aliased by anything when it's finally closed. */
+        int out_fd = -1, in_fd = -1;
+        int saved_out = -1, saved_in = -1;
+        if (out_file) {
+            char path[128] = "/disk/"; strcat(path, out_file);
+            out_fd = _syscall(SYS_OPEN, (int)path, O_WRONLY|O_CREAT|(append?O_APPEND:O_TRUNC), 0);
+            if (out_fd < 0) { printf("kush: can't open %s\n", out_file); return 1; }
+            saved_out = sys_dup2(1, 12);
+            sys_dup2(out_fd, 1);
         }
-        if (!strcmp(cmd,"help"))    return do_help(argv,argc);
-        if (!strcmp(cmd,"ls"))      return do_ls(argv,argc);
-        if (!strcmp(cmd,"cat"))     return do_cat(argv,argc);
-        if (!strcmp(cmd,"wc"))      return do_wc(argv,argc);
-        if (!strcmp(cmd,"sort"))    return do_sort(argv,argc);
-        if (!strcmp(cmd,"uniq"))    return do_uniq(argv,argc);
-        if (!strcmp(cmd,"cp"))      return do_cp(argv,argc);
-        if (!strcmp(cmd,"rm"))      return do_rm(argv,argc);
-        if (!strcmp(cmd,"cd"))      return do_cd(argv,argc);
-        if (!strcmp(cmd,"pwd"))     return do_pwd(argv,argc);
-        if (!strcmp(cmd,"stat"))    return do_stat(argv,argc);
-        if (!strcmp(cmd,"echo"))    return do_echo(argv,argc);
-        if (!strcmp(cmd,"date"))    return do_date(argv,argc);
-        if (!strcmp(cmd,"history")) return do_history(argv,argc);
-        if (!strcmp(cmd,"write"))   return do_write(argv,argc);
-        if (!strcmp(cmd,"kill"))    return do_kill(argv,argc);
-        if (!strcmp(cmd,"clear"))   { fputs("\033[2J\033[H"); return 0; }
-        return do_exec(cmd);
+        if (in_file) {
+            in_fd = open(in_file);
+            if (in_fd < 0) {
+                printf("kush: %s: not found\n", in_file);
+                if (saved_out >= 0) { sys_dup2(saved_out, 1); close(saved_out); }
+                if (out_fd >= 0) close(out_fd);
+                return 1;
+            }
+            saved_in = sys_dup2(0, 13);
+            sys_dup2(in_fd, 0);
+        }
+
+        int ret = dispatch_one(argv, argc);
+
+        if (saved_out >= 0) { sys_dup2(saved_out, 1); close(saved_out); }
+        if (saved_in  >= 0) { sys_dup2(saved_in,  0); close(saved_in);  }
+        if (out_fd >= 0) close(out_fd);
+        if (in_fd  >= 0) close(in_fd);
+        return ret;
     }
 
     int pipefd[2];
@@ -392,13 +562,12 @@ static void print_prompt(void) {
 
 static void motd(void) {
     fputs("\n");
-    fputs("  ██╗  ██╗██╗   ██╗███████╗██╗  ██╗\n");
-    fputs("  ██║ ██╔╝██║   ██║██╔════╝██║  ██║\n");
-    fputs("  █████╔╝ ██║   ██║███████╗███████║\n");
-    fputs("  ██╔═██╗ ██║   ██║╚════██║██╔══██║\n");
-    fputs("  ██║  ██╗╚██████╔╝███████║██║  ██║\n");
-    fputs("  ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝\n");
-    printf("\n  kush v%s — KumOS Shell  (type 'help')\n\n", KUSH_VER);
+    fputs("  _  ___   _ ____  _   _\n");
+    fputs(" | |/ / | | / ___|| | | |\n");
+    fputs(" | ' /| | | \\___ \\| |_| |\n");
+    fputs(" | . \\| |_| |___) |  _  |\n");
+    fputs(" |_|\\_\\\\___/|____/|_| |_|\n");
+    printf("\n  kush v%s - KumOS Shell  (type 'help')\n\n", KUSH_VER);
 }
 
 static int run_script(const char *filename) {

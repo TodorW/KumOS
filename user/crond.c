@@ -23,6 +23,11 @@ static void cron_add(uint32_t interval, const char *cmd) {
 }
 
 static void run_cmd(const char *cmd) {
+    /* NOTE: real fork()+exec() here hits the same broken paging_clone_dir()
+       bug documented in kush.c's do_exec() - reverted to a plain exec,
+       which means crond (like kush) gets replaced by the first job it
+       runs and never loops again. A real fix needs page-table-level
+       granularity in paging_clone_dir()/paging_free_user(); see kush.c. */
     char upper[64]; int i=0;
     while(cmd[i]&&i<60){char c=cmd[i];if(c>='a'&&c<='z')c-=32;upper[i++]=c;}
     upper[i]=0;
@@ -31,7 +36,7 @@ static void run_cmd(const char *cmd) {
 }
 
 int main(void) {
-    printf("\n  crond — KumOS cron daemon\n");
+    printf("\n  crond - KumOS cron daemon\n");
     printf("  PID: %d\n\n", getpid());
 
     cron_add(10, "sysinfo");
