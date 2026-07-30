@@ -3,9 +3,8 @@
 
 #include <stdint.h>
 
-#define GUI_WIDTH    320
-#define GUI_HEIGHT   200
-#define GUI_FB       ((uint8_t *)0xA0000)
+#define GUI_WIDTH    1024
+#define GUI_HEIGHT   768
 
 #define C_BLACK        0
 #define C_BLUE         1

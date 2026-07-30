@@ -15,94 +15,15 @@
 #include "signal.h"
 #include "pkg.h"
 #include "pkgnet.h"
+#include "serial.h"
 #include <stdint.h>
 
 static inline void outb(uint16_t p, uint8_t v) { __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p)); }
 static inline uint8_t inb(uint16_t p) { uint8_t v; __asm__ volatile("inb %1,%0":"=a"(v):"Nd"(p)); return v; }
-
-static void set_mode13h(void) {
-
-    outb(0x3C2, 0x63);
-
-    outb(0x3C4, 0x00); outb(0x3C5, 0x03);
-    outb(0x3C4, 0x01); outb(0x3C5, 0x01);
-    outb(0x3C4, 0x02); outb(0x3C5, 0x0F);
-    outb(0x3C4, 0x03); outb(0x3C5, 0x00);
-    outb(0x3C4, 0x04); outb(0x3C5, 0x0E);
-    outb(0x3C4, 0x00); outb(0x3C5, 0x03);
-
-    outb(0x3D4, 0x11); outb(0x3D5, inb(0x3D5) & 0x7F);
-
-    static const uint8_t crtc13[25] = {
-        0x5F,
-        0x4F,
-        0x50,
-        0x82,
-        0x54,
-        0x80,
-        0xBF,
-        0x1F,
-        0x00,
-        0x41,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x9C,
-        0x0E,
-        0x8F,
-        0x28,
-        0x40,
-        0x96,
-        0xB9,
-        0xA3,
-        0xFF,
-    };
-    for (int i = 0; i < 25; i++) {
-        outb(0x3D4, (uint8_t)i);
-        outb(0x3D5, crtc13[i]);
-    }
-
-    static const uint8_t gc13[9] = {
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-        0x40,
-        0x05,
-        0x0F,
-        0xFF,
-    };
-    for (int i = 0; i < 9; i++) {
-        outb(0x3CE, (uint8_t)i);
-        outb(0x3CF, gc13[i]);
-    }
-
-    inb(0x3DA);
-    static const uint8_t ac13[21] = {
-        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
-        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
-        0x41,
-        0x00,
-        0x0F,
-        0x00,
-        0x00,
-    };
-    for (int i = 0; i < 21; i++) {
-        outb(0x3C0, (uint8_t)i);
-        outb(0x3C0, ac13[i]);
-    }
-    outb(0x3C0, 0x20);
-
-    while (  inb(0x3DA) & 0x08);
-    while (!(inb(0x3DA) & 0x08));
-
-    uint8_t *fb = (uint8_t *)0xA0000;
-    for (int i = 0; i < 320*200; i++) fb[i] = 0;
-}
+static inline void outw_(uint16_t p, uint16_t v) { __asm__ volatile("outw %0,%1"::"a"(v),"Nd"(p)); }
+static inline uint16_t inw_(uint16_t p) { uint16_t v; __asm__ volatile("inw %1,%0":"=a"(v):"Nd"(p)); return v; }
+static inline void outl_(uint16_t p, uint32_t v) { __asm__ volatile("outl %0,%1"::"a"(v),"Nd"(p)); }
+static inline uint32_t inl_(uint16_t p) { uint32_t v; __asm__ volatile("inl %1,%0":"=a"(v):"Nd"(p)); return v; }
 
 static void set_mode3h(void) {
     outb(0x3C2, 0x67);
@@ -138,8 +59,80 @@ static void set_mode3h(void) {
     outb(0x3C0, 0x20);
 }
 
-static void set_palette(void) {
+/* Bochs/QEMU "dispi" VBE interface: a handful of I/O-port registers that
+   let you pick a linear-framebuffer resolution/depth directly, no real-mode
+   VBE BIOS calls needed. QEMU's -vga std (and qxl/virtio compat mode)
+   emulate this. The framebuffer's physical base comes off the PCI device's
+   BAR0 - same PCI-config-space dance net.c already does for the rtl8139. */
+#define VBE_IOPORT_INDEX 0x01CE
+#define VBE_IOPORT_DATA   0x01CF
+#define VBE_IDX_ID        0
+#define VBE_IDX_XRES      1
+#define VBE_IDX_YRES      2
+#define VBE_IDX_BPP       3
+#define VBE_IDX_ENABLE    4
+#define VBE_DISABLED      0x00
+#define VBE_ENABLED       0x01
+#define VBE_LFB_ENABLED   0x40
 
+static void vbe_write(uint16_t idx, uint16_t val) {
+    outw_(VBE_IOPORT_INDEX, idx);
+    outw_(VBE_IOPORT_DATA, val);
+}
+static uint16_t vbe_read(uint16_t idx) {
+    outw_(VBE_IOPORT_INDEX, idx);
+    return inw_(VBE_IOPORT_DATA);
+}
+
+static uint32_t pci_cfg_read(uint8_t bus, uint8_t dev, uint8_t fn, uint8_t reg) {
+    outl_(0xCF8, 0x80000000u | ((uint32_t)bus<<16) | ((uint32_t)dev<<11) | ((uint32_t)fn<<8) | (reg & 0xFC));
+    return inl_(0xCFC);
+}
+
+static uint32_t find_vbe_fb_phys(void) {
+    for (uint16_t bd = 0; bd < 256*32; bd++) {
+        uint8_t bus = (uint8_t)(bd/32), dev = (uint8_t)(bd%32);
+        uint32_t id = pci_cfg_read(bus, dev, 0, 0x00);
+        if ((id & 0xFFFF) == 0x1234 && ((id>>16) & 0xFFFF) == 0x1111) {
+            uint32_t bar0 = pci_cfg_read(bus, dev, 0, 0x10);
+            return bar0 & ~0xFu;
+        }
+    }
+    return 0;
+}
+
+static uint32_t fb_phys_addr = 0;
+static uint32_t fb_pitch     = 0;
+static uint8_t *fb_ptr       = 0;
+
+static int set_vbe_mode(uint16_t width, uint16_t height, uint16_t bpp) {
+    if (!fb_phys_addr) {
+        fb_phys_addr = find_vbe_fb_phys();
+        if (!fb_phys_addr) return -1;
+    }
+    uint16_t id = vbe_read(VBE_IDX_ID);
+    if (id < 0xB0C0 || id > 0xB0C6) return -1;
+
+    vbe_write(VBE_IDX_ENABLE, VBE_DISABLED);
+    vbe_write(VBE_IDX_XRES, width);
+    vbe_write(VBE_IDX_YRES, height);
+    vbe_write(VBE_IDX_BPP,  bpp);
+    vbe_write(VBE_IDX_ENABLE, VBE_ENABLED | VBE_LFB_ENABLED);
+
+    fb_pitch = (uint32_t)width * (bpp/8);
+    fb_ptr   = (uint8_t*)fb_phys_addr;
+
+    uint32_t size  = fb_pitch * height;
+    uint32_t start = fb_phys_addr & ~0xFFFu;
+    uint32_t end   = (fb_phys_addr + size + 0xFFF) & ~0xFFFu;
+    for (uint32_t p = start; p < end; p += PAGE_SIZE) paging_map(p, p, PAGE_WRITE);
+
+    return 0;
+}
+
+static uint32_t gui_pal_rgb[256];
+
+static void build_palette(void) {
     struct { uint8_t r,g,b; } pal[64] = {
         {0,0,0},
         {0,0,42},
@@ -186,44 +179,50 @@ static void set_palette(void) {
         {20,55,63}, {17,50,60}, {14,45,57}, {11,40,54},
         {8,35,50},  {6,30,46},  {4,25,42},  {2,20,38},
     };
-    outb(0x3C8, 0);
-    for (int i = 0; i < 64; i++) {
-        outb(0x3C9, pal[i].r);
-        outb(0x3C9, pal[i].g);
-        outb(0x3C9, pal[i].b);
-    }
+    for (int i = 0; i < 64; i++)
+        gui_pal_rgb[i] = ((uint32_t)(pal[i].r*255/63) << 16) |
+                         ((uint32_t)(pal[i].g*255/63) << 8)  |
+                          (uint32_t)(pal[i].b*255/63);
 
     for (int i = 64; i < 256; i++) {
-        uint8_t v = (uint8_t)(i / 4);
-        outb(0x3C9, v); outb(0x3C9, v); outb(0x3C9, v);
+        uint32_t v = (uint32_t)(i/4) * 255/63;
+        gui_pal_rgb[i] = (v<<16)|(v<<8)|v;
     }
 }
 
-void gui_init(void) {
+static uint8_t *backbuf = 0;
 
-    set_mode13h();
-    set_palette();
+void gui_init(void) {
+    if (set_vbe_mode(GUI_WIDTH, GUI_HEIGHT, 32) != 0)
+        serial_printf("[gui] no VBE framebuffer found (need qemu -vga std)\r\n");
+    build_palette();
+    if (!backbuf) backbuf = (uint8_t*)vmalloc(GUI_WIDTH * GUI_HEIGHT);
     mouse_set_bounds(GUI_WIDTH - 1, GUI_HEIGHT - 1);
 }
 
 void gui_exit(void) {
+    vbe_write(VBE_IDX_ENABLE, VBE_DISABLED);
     set_mode3h();
     vga_init();
     mouse_set_bounds(79, 24);
 }
 
-static uint8_t backbuf[GUI_WIDTH * GUI_HEIGHT];
-
 void gui_pixel(int x, int y, uint8_t c) {
-    if ((unsigned)x < GUI_WIDTH && (unsigned)y < GUI_HEIGHT)
+    if (backbuf && (unsigned)x < GUI_WIDTH && (unsigned)y < GUI_HEIGHT)
         backbuf[y * GUI_WIDTH + x] = c;
 }
 
 static void gui_flip(void) {
-    kmemcpy(GUI_FB, backbuf, GUI_WIDTH * GUI_HEIGHT);
+    if (!backbuf || !fb_ptr) return;
+    for (uint32_t y = 0; y < GUI_HEIGHT; y++) {
+        uint32_t *row = (uint32_t*)(fb_ptr + y*fb_pitch);
+        uint8_t  *src = backbuf + y*GUI_WIDTH;
+        for (uint32_t x = 0; x < GUI_WIDTH; x++) row[x] = gui_pal_rgb[src[x]];
+    }
 }
 
 void gui_clear(uint8_t c) {
+    if (!backbuf) return;
     for (int i = 0; i < GUI_WIDTH * GUI_HEIGHT; i++) backbuf[i] = c;
 }
 
@@ -413,15 +412,15 @@ static void icon_glyph(int x, int y, icon_kind_t kind) {
 
 void gui_icon(int x, int y, const char *label, uint8_t icon_color, icon_kind_t kind) {
 
-    fill_rounded(x+1, y+1, 26, 18, C_SHADOW);
-    fill_rounded(x, y, 26, 18, icon_color);
-    outline_rounded(x, y, 26, 18, C_WIN_BORDER);
+    fill_rounded(x+1, y+1, 30, 22, C_SHADOW);
+    fill_rounded(x, y, 30, 22, icon_color);
+    outline_rounded(x, y, 30, 22, C_WIN_BORDER);
 
-    icon_glyph(x+3, y+2, kind);
+    icon_glyph(x+5, y+4, kind);
 
-    int lx = x + (26 - (int)kstrlen(label)*8)/2;
+    int lx = x + (30 - (int)kstrlen(label)*8)/2;
     if (lx < x) lx = x;
-    gui_puts(lx, y+19, label, C_WHITE, C_DESKTOP);
+    gui_puts(lx, y+23, label, C_WHITE, C_DESKTOP);
 }
 
 #define CUR_W 8
@@ -455,8 +454,8 @@ static int point_in(int px, int py, int x, int y, int w, int h) {
     return px>=x && px<x+w && py>=y && py<y+h;
 }
 
-#define ICON_START_Y 12
-#define ICON_SLOT    26
+#define ICON_START_Y 16
+#define ICON_SLOT    38
 
 typedef enum {
     WIN_TERMINAL=0, WIN_FILES=1, WIN_SYSMON=2,
@@ -604,10 +603,10 @@ void gui_draw_desktop(void) {
                "Drag bar to move, Esc to close");
 }
 
-#define TERM_W    280
-#define TERM_H    150
-#define TERM_ROWS  15
-#define TERM_COLS  34
+#define TERM_W    680
+#define TERM_H    460
+#define TERM_ROWS  48
+#define TERM_COLS  84
 
 #define TERM_BG       C_DARK_BLUE
 #define TERM_FG       C_WHITE
@@ -869,7 +868,7 @@ static void term_exec(const char *cmd) {
     }
 }
 
-#define FILES_MAX    32
+#define FILES_MAX    40
 #define FILES_ROW_H   9
 
 static fat12_entry_t files_entries[FILES_MAX];
@@ -981,9 +980,9 @@ static const char *calc_labels[4][4] = {
     {"0","C","=","+"},
 };
 
-#define CALC_BW  24
-#define CALC_BH  18
-#define CALC_GAP  2
+#define CALC_BW  30
+#define CALC_BH  22
+#define CALC_GAP  3
 
 static void calc_grid_origin(winrec_t *w, int *gx, int *gy) {
     *gx = w->x+4; *gy = w->y+34;
@@ -1055,8 +1054,8 @@ static void calc_handle_click(winrec_t *w, int mx, int my) {
         }
 }
 
-#define EDIT_ROWS 10
-#define EDIT_COLS 34
+#define EDIT_ROWS 20
+#define EDIT_COLS 50
 
 static char editor_lines[EDIT_ROWS][EDIT_COLS+1];
 static int  editor_row = 0, editor_col = 0;
@@ -1202,7 +1201,7 @@ void gui_run(void) {
 
     for (int i=0;i<WIN_COUNT;i++) wins[i].active = 0;
     zcount = 0;
-    wm_open(WIN_TERMINAL, 40, 14, TERM_W, TERM_H);
+    wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
 
     int prev_left = 0;
     int dragging = -1, drag_ox = 0, drag_oy = 0;
@@ -1308,14 +1307,14 @@ void gui_run(void) {
             } else if (my < 10) {
                 int th = taskbar_hit(mx, my);
                 if (th >= 0) { wins[th].minimized = 0; wm_push_front(th); }
-            } else if (mx < 45 && my >= ICON_START_Y) {
+            } else if (mx < 48 && my >= ICON_START_Y) {
                 int iconidx = (my-ICON_START_Y)/ICON_SLOT;
-                if (iconidx==0)      wm_open(WIN_TERMINAL, 40, 14, TERM_W, TERM_H);
-                else if (iconidx==1) wm_open(WIN_FILES,    15, 30, 150, 130);
-                else if (iconidx==2) wm_open(WIN_SYSMON,  130, 20, 175, 150);
-                else if (iconidx==3) wm_open(WIN_CALC,     60, 40, 110, 150);
-                else if (iconidx==4) wm_open(WIN_EDITOR,   70, 25, 210, 160);
-                else if (iconidx==5) wm_open(WIN_PKG,      45, 20, 170, 140);
+                if (iconidx==0)      wm_open(WIN_TERMINAL, 40,  20, TERM_W, TERM_H);
+                else if (iconidx==1) wm_open(WIN_FILES,   760,  20, 230, 290);
+                else if (iconidx==2) wm_open(WIN_SYSMON,  760, 330, 230, 290);
+                else if (iconidx==3) wm_open(WIN_CALC,    480, 500, 190, 230);
+                else if (iconidx==4) wm_open(WIN_EDITOR,   40, 500, 420, 230);
+                else if (iconidx==5) wm_open(WIN_PKG,     690, 500, 300, 230);
                 else if (iconidx==6) running = 0;
             }
         }
