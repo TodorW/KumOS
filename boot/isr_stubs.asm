@@ -136,11 +136,7 @@ global isr128
 
 isr128:
 
-    push eax
-    push edx
-    push ecx
-    push ebx
-
+    pusha
     push ds
     push es
     push fs
@@ -151,25 +147,19 @@ isr128:
     mov fs, ax
     mov gs, ax
 
-    mov eax, [esp+28]
-    mov ebx, [esp+16]
-    mov ecx, [esp+20]
-    mov edx, [esp+24]
-
-    push edx
-    push ecx
-    push ebx
-    push eax
+    push esp
     call syscall_dispatch
-    add esp, 16
+    add esp, 4
+
+    ; overwrite the pushed EAX slot with the return value so popa
+    ; restores it correctly (offsets: gs,fs,es,ds = 16 bytes, then
+    ; edi,esi,ebp,esp_dummy,ebx,edx,ecx = 28 bytes to reach eax)
+    mov [esp+16+28], eax
 
     pop gs
     pop fs
     pop es
     pop ds
-    pop ebx
-    pop ecx
-    pop edx
-    add esp, 4
+    popa
 
     iret

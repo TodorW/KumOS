@@ -46,7 +46,8 @@
 
 void syscall_init(void);
 
-uint32_t syscall_dispatch(uint32_t num, uint32_t a, uint32_t b, uint32_t c);
+struct syscall_regs;
+uint32_t syscall_dispatch(struct syscall_regs *regs);
 
 static inline void sys_exit(int code) {
     __asm__ volatile("int $0x80" :: "a"(SYS_EXIT), "b"(code));

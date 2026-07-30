@@ -24,6 +24,19 @@ extern void isr128(void);
 extern void user_entry_trampoline(void);
 extern void switch_context(uint32_t *old_esp, uint32_t new_esp);
 
+/* Exact stack layout isr128 builds before calling us: pusha, then
+   push ds/es/fs/gs, then the CPU's own ring3->ring0 transition pushes
+   (eip/cs/eflags/useresp/ss). Needed so sc_fork() can build a child
+   that resumes at the parent's real return address instead of a
+   fabricated one - see the invalid-opcode panic this fixed. */
+typedef struct syscall_regs {
+    uint32_t gs, fs, es, ds;
+    uint32_t edi, esi, ebp, esp_dummy, ebx, edx, ecx, eax;
+    uint32_t eip, cs, eflags, useresp, ss;
+} __attribute__((packed)) syscall_regs_t;
+
+static syscall_regs_t *g_cur_regs;
+
 static uint32_t sc_exit(uint32_t code, uint32_t b, uint32_t c) {
     (void)b; (void)c;
 
@@ -359,6 +372,7 @@ static uint32_t sc_exec(uint32_t path_addr, uint32_t b, uint32_t c) {
 static uint32_t sc_fork(uint32_t a, uint32_t b, uint32_t c) {
     (void)a;(void)b;(void)c;
     task_t *parent = sched_current();
+    syscall_regs_t *pr = g_cur_regs;
 
     uint32_t child_dir = paging_clone_dir();
     if (!child_dir) return (uint32_t)-1;
@@ -386,15 +400,35 @@ static uint32_t sc_fork(uint32_t a, uint32_t b, uint32_t c) {
     child->stack      = child_kstack;
     child->stack_size = SCHED_STACK_SIZE;
 
+    /* Build the exact stack shape switch_context()/user_entry_trampoline
+       expect for a task's first-ever resume (see sched_switch.asm):
+       4 dummy callee-saved regs + a fake return address into the
+       trampoline, which itself expects a DS value then a pusha-shaped
+       register block, then the CPU's own iret frame. The previous version
+       here only pushed 16 of the needed 19 words (no trampoline address
+       at all, and zeroed every register including EBP), which is why the
+       child crashed with an invalid-opcode fault the instant it resumed -
+       everything downstream was reading garbage. Using the parent's real
+       captured registers (g_cur_regs, snapshotted by isr128 at syscall
+       entry) means the child resumes at the same point as the parent,
+       with the same registers, except EAX=0 (the fork() return value). */
     uint32_t *sp = (uint32_t *)((uint8_t *)child_kstack + SCHED_STACK_SIZE);
-    *--sp = 0x23;
-    *--sp = parent->esp;
-    *--sp = 0x202;
-    *--sp = 0x1B;
-    *--sp = 0;
-    for(int j=0;j<8;j++) *--sp=0;
-    *--sp = 0x23;
-    *--sp = 0; *--sp = 0;
+    *--sp = pr->ss;
+    *--sp = pr->useresp;
+    *--sp = pr->eflags;
+    *--sp = pr->cs;
+    *--sp = pr->eip;
+    *--sp = 0;          /* EAX = 0 in the child */
+    *--sp = pr->ecx;
+    *--sp = pr->edx;
+    *--sp = pr->ebx;
+    *--sp = 0;          /* esp_dummy, ignored by popa */
+    *--sp = pr->ebp;
+    *--sp = pr->esi;
+    *--sp = pr->edi;
+    *--sp = pr->ds;
+    *--sp = (uint32_t)(uintptr_t)user_entry_trampoline;
+    *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
     child->esp = (uint32_t)(uintptr_t)sp;
 
     return (uint32_t)child_pid;
@@ -484,7 +518,9 @@ static syscall_fn syscall_table[SYSCALL_MAX] = {
     [SYS_POLL]        = sc_poll,
 };
 
-uint32_t syscall_dispatch(uint32_t num, uint32_t a, uint32_t b, uint32_t c) {
+uint32_t syscall_dispatch(syscall_regs_t *regs) {
+    g_cur_regs = regs;
+    uint32_t num = regs->eax, a = regs->ebx, b = regs->ecx, c = regs->edx;
     if (num >= SYSCALL_MAX || !syscall_table[num]) return (uint32_t)-1;
     return syscall_table[num](a, b, c);
 }

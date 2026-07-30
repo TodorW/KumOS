@@ -4,7 +4,23 @@
 #include "kstring.h"
 #include "kmalloc.h"
 #include "gdt.h"
+#include "paging.h"
+#include "keyboard.h"
+#include "signal.h"
 #include <stdint.h>
+
+/* Switch CR3 to whatever address space the about-to-run task expects.
+   Tasks that never forked/execve'd have page_dir_phys==0 and use the
+   shared root directory. Without this, a task with its own cloned
+   directory (fork/execve) that yields would leave CR3 pointing at
+   whichever address space last ran when a *different* task resumes -
+   every virtual address above 1GB (user stack/code) then resolves
+   through the wrong page tables. This was never hit before fork() got
+   fixed to actually work, since nothing previously coexisted via
+   cooperative yield with a genuinely different page directory live. */
+static inline void sched_switch_dir(task_t *next) {
+    paging_switch(next->page_dir_phys ? next->page_dir_phys : paging_root_dir());
+}
 
 static task_t   tasks[SCHED_MAX_TASKS];
 static int      task_count  = 0;
@@ -166,6 +182,7 @@ void sched_yield(void) {
     current_idx = next;
 
     tss_set_kernel_stack((uint32_t)tasks[next].stack + tasks[next].stack_size);
+    sched_switch_dir(&tasks[next]);
 
     uint32_t *old_esp_ptr = &tasks[prev].esp;
     uint32_t  new_esp     =  tasks[next].esp;
@@ -197,6 +214,7 @@ void sched_tick(registers_t *r) {
             current_idx = next;
             tss_set_kernel_stack(
                 (uint32_t)tasks[next].stack + tasks[next].stack_size);
+            sched_switch_dir(&tasks[next]);
 
             uint32_t *old_ptr = &tasks[prev].esp;
             uint32_t  new_esp =  tasks[next].esp;
@@ -281,6 +299,8 @@ int sched_waitpid(int pid) {
         for (int i = 0; i < task_count; i++)
             if (tasks[i].pid == pid) { found = 1; break; }
         if (!found) return 0;
+
+        if (keyboard_check_ctrlc()) signal_send(pid, SIGINT);
 
         sched_yield();
     }

@@ -4,7 +4,12 @@
 #include <stdint.h>
 #include "idt.h"
 
-#define SCHED_STACK_SIZE  4096
+/* 4KB was tight enough that a task's own syscall-entry + exit/reschedule
+   call chain could overflow past its allocated kernel stack into an
+   adjacent kmalloc'd block (another task's suspended stack, corrupting
+   its saved registers on resume) - see the fork/exec debugging session
+   that traced this exact scenario. 16KB gives real headroom. */
+#define SCHED_STACK_SIZE  16384
 #define SCHED_MAX_TASKS   16
 #define SCHED_QUANTUM     10
 

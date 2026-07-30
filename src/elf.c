@@ -133,10 +133,10 @@ int elf_spawn(const char *name, elf_load_result_t *res) {
         }
     }
 
-    uint32_t *kstack = kmalloc(8192);
+    uint32_t *kstack = kmalloc(SCHED_STACK_SIZE);
     if (!kstack) return -1;
 
-    uint32_t *sp = (uint32_t *)((uint8_t *)kstack + 8192);
+    uint32_t *sp = (uint32_t *)((uint8_t *)kstack + SCHED_STACK_SIZE);
 
     uint32_t user_esp = stack_top - 4;
 
@@ -167,7 +167,7 @@ int elf_spawn(const char *name, elf_load_result_t *res) {
 
         if (t->stack) kfree(t->stack);
         t->stack      = kstack;
-        t->stack_size = 8192;
+        t->stack_size = SCHED_STACK_SIZE;
         t->esp        = (uint32_t)sp;
     }
 
