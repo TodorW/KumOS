@@ -60,6 +60,8 @@ static uint8_t  arp_cache_ip[8][4];
 static uint8_t  arp_cache_mac[8][ETH_ALEN];
 static int      arp_count = 0;
 
+static uint32_t tx_packets = 0, rx_packets = 0;
+
 #define RX_RING_SIZE 4
 static struct { uint8_t buf[1600]; uint16_t len; } rx_ring[RX_RING_SIZE];
 static int rx_head = 0, rx_tail = 0;
@@ -128,7 +130,13 @@ int net_send_raw(const void *frame, uint16_t len) {
     tx_idx = (tx_idx+1) % TX_BUFS;
     int tries=10000;
     while(tries--) { if(inl(rtl_iobase+RTL_TSD0+((tx_idx+TX_BUFS-1)%TX_BUFS)*4)&0x8000) break; }
+    tx_packets++;
     return 0;
+}
+
+void net_get_stats(uint32_t *tx, uint32_t *rx) {
+    if (tx) *tx = tx_packets;
+    if (rx) *rx = rx_packets;
 }
 
 static void arp_learn(uint32_t ip, const uint8_t mac[ETH_ALEN]) {
@@ -219,6 +227,7 @@ void net_poll(void) {
            CRC, which isn't part of the actual frame data */
         uint16_t frame_len = (uint16_t)(pkt_len >= 4 ? pkt_len - 4 : 0);
         uint8_t *payload = p+4;
+        rx_packets++;
         eth_hdr_t *eth=(eth_hdr_t*)payload;
         uint16_t etype=NET_HTONS(eth->type);
         if (etype==ETH_P_ARP && frame_len>=14+sizeof(arp_pkt_t)) {

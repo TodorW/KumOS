@@ -18,6 +18,8 @@
 #include "serial.h"
 #include "elf.h"
 #include "vfs.h"
+#include "net.h"
+#include "speaker.h"
 #include <stdint.h>
 
 static inline void outb(uint16_t p, uint8_t v) { __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p)); }
@@ -522,11 +524,47 @@ static void wm_close(int t) {
     wm_remove_z(t);
 }
 
+static void wm_cascade(void) {
+    int i = 0;
+    for (int z=0; z<zcount; z++) {
+        winrec_t *w = &wins[zorder[z]];
+        if (!w->active || w->minimized) continue;
+        int nx = 44 + i*28, ny = 14 + i*22;
+        if (nx + w->w > GUI_WIDTH)  nx = 44;
+        if (ny + w->h > GUI_HEIGHT) ny = 14;
+        w->x = nx; w->y = ny;
+        i++;
+    }
+}
+
+static void wm_tile(void) {
+    int list[WIN_COUNT], n = 0;
+    for (int z=0; z<zcount; z++) {
+        int t = zorder[z];
+        if (wins[t].active && !wins[t].minimized) list[n++] = t;
+    }
+    if (n == 0) return;
+    int cols = 1; while (cols*cols < n) cols++;
+    int rows = (n + cols - 1) / cols;
+    int areaY = 10, areaH = GUI_HEIGHT - areaY;
+    int cellW = GUI_WIDTH / cols, cellH = areaH / rows;
+    for (int i=0;i<n;i++) {
+        int r = i / cols, c = i % cols;
+        winrec_t *w = &wins[list[i]];
+        w->x = c*cellW + 2;
+        w->y = areaY + r*cellH + 2;
+        w->w = cellW - 4; if (w->w < w->min_w) w->w = w->min_w;
+        w->h = cellH - 4; if (w->h < w->min_h) w->h = w->min_h;
+    }
+}
+
 #define TB_TAB_MAX WIN_COUNT
 static int tb_tab_type[TB_TAB_MAX];
 static int tb_tab_x0[TB_TAB_MAX];
 static int tb_tab_x1[TB_TAB_MAX];
 static int tb_tab_count = 0;
+static int tb_cascade_x0, tb_cascade_x1;
+static int tb_tile_x0, tb_tile_x1;
 
 void gui_draw_taskbar(void) {
     for (int y=0;y<9;y++) {
@@ -555,6 +593,14 @@ void gui_draw_taskbar(void) {
         tb_tab_count++;
         tx += tw + 3;
     }
+
+    tb_cascade_x0 = GUI_WIDTH - 178; tb_cascade_x1 = tb_cascade_x0 + 11;
+    fill_rounded(tb_cascade_x0, 0, 11, 9, (uint8_t)(C_GRAD_TASKBAR+2));
+    gui_putchar(tb_cascade_x0+2, 1, 'C', C_WHITE, (uint8_t)(C_GRAD_TASKBAR+2));
+
+    tb_tile_x0 = tb_cascade_x1 + 2; tb_tile_x1 = tb_tile_x0 + 11;
+    fill_rounded(tb_tile_x0, 0, 11, 9, (uint8_t)(C_GRAD_TASKBAR+2));
+    gui_putchar(tb_tile_x0+2, 1, 'T', C_WHITE, (uint8_t)(C_GRAD_TASKBAR+2));
 
     rtc_time_t t = rtc_read();
     char timebuf[10];
@@ -926,6 +972,7 @@ static void term_exec(const char *cmd) {
     } else if (*cmd) {
         kstrcpy(line, "Unknown: "); kstrcat(line, cmd);
         term_puts_c(line, TERM_FG_ERR);
+        speaker_beep(300, 100);
     }
 }
 
@@ -1015,6 +1062,16 @@ static void render_sysmon(winrec_t *w) {
     gui_printf(cx,cy, C_WHITE, C_BLACK, "Heap: %uK/%uK", kmalloc_used()/1024, (kmalloc_used()+kmalloc_free())/1024); cy += 9;
     gui_printf(cx,cy, C_WHITE, C_BLACK, "Frames: %u/%u", pmm_used(), pmm_total()); cy += 9;
     gui_printf(cx,cy, C_LIGHT_CYAN,C_BLACK, "Tasks: %d", sched_task_count()); cy += 9;
+
+    if (net_ready()) {
+        uint32_t ip = net_get_ip();
+        uint32_t txp, rxp; net_get_stats(&txp, &rxp);
+        gui_printf(cx,cy, C_LIGHT_GREEN,C_BLACK, "Net: %d.%d.%d.%d",
+                   (int)(ip>>24)&0xFF, (int)(ip>>16)&0xFF, (int)(ip>>8)&0xFF, (int)ip&0xFF); cy += 9;
+        gui_printf(cx,cy, C_WHITE,C_BLACK, "TX:%u RX:%u pkts", txp, rxp); cy += 9;
+    } else {
+        gui_printf(cx,cy, C_LIGHT_RED,C_BLACK, "Net: no NIC"); cy += 9;
+    }
 
     int maxrows = (w->y+w->h-9-cy) / 9;
     int shown = 0;
@@ -1277,6 +1334,82 @@ static void pkg_handle_click(winrec_t *w, int mx, int my) {
     }
 }
 
+#define LAUNCH_ROW_H 16
+#define LAUNCH_W     168
+#define LAUNCH_MAX   16
+
+typedef struct { const char *label; icon_kind_t icon; int wintype; int is_pkg; int pkg_idx; } launch_item_t;
+
+static int launcher_open = 0;
+
+static int launcher_build(launch_item_t *items, int max) {
+    int n = 0;
+    if (n<max) items[n++] = (launch_item_t){"Terminal",       ICON_TERM,    WIN_TERMINAL, 0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Files",          ICON_FOLDER,  WIN_FILES,    0, 0};
+    if (n<max) items[n++] = (launch_item_t){"System Monitor", ICON_MONITOR, WIN_SYSMON,   0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Calculator",     ICON_CALC,    WIN_CALC,     0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Notepad",        ICON_NOTE,    WIN_EDITOR,   0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Packages",       ICON_PKG,     WIN_PKG,      0, 0};
+    int total = pkgwin_total();
+    for (int i=0;i<total && n<max;i++) {
+        if (!pkgwin_installed(i)) continue;
+        items[n].label = pkgwin_name(i);
+        items[n].icon = ICON_PKG;
+        items[n].wintype = -1;
+        items[n].is_pkg = 1;
+        items[n].pkg_idx = i;
+        n++;
+    }
+    return n;
+}
+
+static void launcher_open_wintype(int t) {
+    switch (t) {
+        case WIN_TERMINAL: wm_open(WIN_TERMINAL, 40,  20, TERM_W, TERM_H); break;
+        case WIN_FILES:    wm_open(WIN_FILES,   760,  20, 230, 290);       break;
+        case WIN_SYSMON:   wm_open(WIN_SYSMON,  760, 330, 230, 290);       break;
+        case WIN_CALC:     wm_open(WIN_CALC,    480, 500, 190, 230);       break;
+        case WIN_EDITOR:   wm_open(WIN_EDITOR,   40, 500, 420, 230);       break;
+        case WIN_PKG:      wm_open(WIN_PKG,     690, 500, 300, 230);       break;
+    }
+}
+
+static void launcher_run_pkg(int pkg_idx) {
+    wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
+    char cmdbuf[TERM_COLS+1];
+    kstrcpy(cmdbuf, "exec "); kstrcat(cmdbuf, pkgwin_fname(pkg_idx));
+    char echo[TERM_COLS+3];
+    kstrcpy(echo, "> "); kstrcat(echo, cmdbuf);
+    term_puts_c(echo, TERM_FG_ECHO);
+    term_exec(cmdbuf);
+}
+
+static void draw_launcher(void) {
+    launch_item_t items[LAUNCH_MAX];
+    int n = launcher_build(items, LAUNCH_MAX);
+    int h = n*LAUNCH_ROW_H + 6;
+    int x = 1, y = 11;
+
+    fill_rounded(x+2, y+2, LAUNCH_W, h, C_SHADOW);
+    fill_rounded(x, y, LAUNCH_W, h, C_WIN_BG);
+    outline_rounded(x, y, LAUNCH_W, h, C_WIN_BORDER);
+
+    for (int i=0;i<n;i++) {
+        int ry = y+3+i*LAUNCH_ROW_H;
+        if (i == 6 && n > 6) gui_hline(x+4, ry-2, LAUNCH_W-8, C_WIN_BORDER);
+        icon_glyph(x+6, ry+1, items[i].icon);
+        gui_puts(x+30, ry+4, items[i].label, C_WHITE, C_WIN_BG);
+    }
+}
+
+/* -2 = click outside the panel, -1 = inside panel but not on a row, >=0 = row index */
+static int launcher_hit(int mx, int my, int n) {
+    int h = n*LAUNCH_ROW_H + 6;
+    if (!point_in(mx, my, 1, 11, LAUNCH_W, h)) return -2;
+    int row = (my - 14) / LAUNCH_ROW_H;
+    return (row >= 0 && row < n) ? row : -1;
+}
+
 void gui_run(void) {
     gui_init();
     term_init();
@@ -1308,6 +1441,7 @@ void gui_run(void) {
         }
 
         gui_draw_taskbar();
+        if (launcher_open) draw_launcher();
 
         mouse_state_t *m = mouse_get();
         int mx = m->x, my = m->y;
@@ -1321,7 +1455,8 @@ void gui_run(void) {
         if (key) {
             int top = wm_topmost();
             if (key == 27) {
-                if (top >= 0) wm_close(top);
+                if (launcher_open) launcher_open = 0;
+                else if (top >= 0) wm_close(top);
                 else running = 0;
             } else if (top == WIN_TERMINAL) {
                 if (key == '\n') {
@@ -1355,7 +1490,16 @@ void gui_run(void) {
         }
 
         int left_now = m->left;
-        if (left_now && !prev_left) {
+        if (left_now && !prev_left && launcher_open) {
+            launch_item_t items[LAUNCH_MAX];
+            int n = launcher_build(items, LAUNCH_MAX);
+            int row = launcher_hit(mx, my, n);
+            launcher_open = 0;
+            if (row >= 0) {
+                if (items[row].is_pkg) launcher_run_pkg(items[row].pkg_idx);
+                else launcher_open_wintype(items[row].wintype);
+            }
+        } else if (left_now && !prev_left) {
 
             int hit = -1;
             for (int i=zcount-1;i>=0 && hit<0;i--) {
@@ -1387,6 +1531,12 @@ void gui_run(void) {
                 } else if (hit == WIN_PKG) {
                     pkg_handle_click(w, mx, my);
                 }
+            } else if (my < 10 && mx < 33) {
+                launcher_open = 1;
+            } else if (my < 10 && mx >= tb_cascade_x0 && mx < tb_cascade_x1) {
+                wm_cascade();
+            } else if (my < 10 && mx >= tb_tile_x0 && mx < tb_tile_x1) {
+                wm_tile();
             } else if (my < 10) {
                 int th = taskbar_hit(mx, my);
                 if (th >= 0) { wins[th].minimized = 0; wm_push_front(th); }

@@ -28,6 +28,7 @@
 #include "users.h"
 #include "dns.h"
 #include "tls.h"
+#include "speaker.h"
 #include "dmesg.h"
 #include "dhcp.h"
 #include "ext2.h"
@@ -828,6 +829,7 @@ static void cmd_help(void) {
     vga_puts("    help, clear, echo, uname, whoami, hostname, uptime, history\n");
     vga_puts("    date              - Current date/time (RTC)\n");
     vga_puts("    mouse             - PS/2 mouse state\n");
+    vga_puts("    beep [hz] [ms]    - PC speaker beep (default 1000hz 200ms)\n");
     vga_set_color(VGA_YELLOW,VGA_BLACK); vga_puts("  Files:\n");
     vga_set_color(VGA_WHITE,VGA_BLACK);
     vga_puts("    ls, cat <f>, touch <f>, write <f> <data>, rm <f>\n");
@@ -973,6 +975,20 @@ static void dispatch(const char *line) {
             int code = sched_waitpid(pid);
             kprintf("PID %d exited with code %d\n", pid, code);
         }
+    }
+    else if(kstrcmp(cmd,"beep")==0) {
+        uint32_t freq = 1000, ms = 200;
+        const char *p = rest;
+        if (*p) {
+            freq = 0;
+            while (*p>='0'&&*p<='9') { freq = freq*10+(uint32_t)(*p-'0'); p++; }
+            while (*p==' ') p++;
+            if (*p) {
+                ms = 0;
+                while (*p>='0'&&*p<='9') { ms = ms*10+(uint32_t)(*p-'0'); p++; }
+            }
+        }
+        speaker_beep(freq, ms);
     }
     else if(kstrcmp(cmd,"hostname")==0){ vga_puts(hostname); vga_putchar('\n'); }
     else if(kstrcmp(cmd,"uptime")==0){
@@ -1309,7 +1325,9 @@ static void dispatch(const char *line) {
     }
     else {
         kprintf("ksh: command not found: %s\n",cmd);
-        vga_puts("Type 'help' for available commands.\n"); }
+        vga_puts("Type 'help' for available commands.\n");
+        speaker_beep(300, 100);
+    }
 }
 
 void kernel_main(uint32_t magic, multiboot_info_t *mbi) {

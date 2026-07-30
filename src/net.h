@@ -62,6 +62,7 @@ int  net_recv_udp(uint16_t port, void *buf, uint16_t bufsz,
 int  net_send_raw(const void *frame, uint16_t len);
 void net_poll(void);
 void net_print_info(void);
+void net_get_stats(uint32_t *tx_packets, uint32_t *rx_packets);
 
 #define NET_IP(a,b,c,d)  ((uint32_t)((a)<<24|(b)<<16|(c)<<8|(d)))
 #define NET_HTONS(x)     ((uint16_t)(((x)>>8)|((x)<<8)))
