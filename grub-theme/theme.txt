@@ -41,9 +41,9 @@ desktop-color: "#070b14"
         left = 2%
         width = 96%
         height = 220
-        item_height = 54
+        item_height = 30
         item_padding = 10
-        item_spacing = 12
+        item_spacing = 40
         item_icon_space = 16
         icon_width = 32
         icon_height = 32
