@@ -1197,6 +1197,11 @@ static int pkgwin_installed(int i) {
     return 0;
 }
 
+static const char *pkgwin_fname(int i) {
+    int n = pkg_count();
+    return (i < n) ? pkg_fname_at(i) : pkgnet_fname_at(i-n);
+}
+
 #define PKGWIN_ROW_H 9
 
 static void render_pkg(winrec_t *w) {
@@ -1216,9 +1221,10 @@ static void render_pkg(winrec_t *w) {
         gui_puts(cx, cy+i*PKGWIN_ROW_H, pkgwin_name(i), fg, bg);
     }
 
-    gui_button(w->x+3,  by, 44, 11, "Update", 0);
-    gui_button(w->x+49, by, 40, 11, "Instl",  0);
-    gui_button(w->x+91, by, 40, 11, "Rmove",  0);
+    gui_button(w->x+3,   by, 44, 11, "Update", 0);
+    gui_button(w->x+49,  by, 36, 11, "Instl",  0);
+    gui_button(w->x+87,  by, 40, 11, "Rmove",  0);
+    gui_button(w->x+129, by, 36, 11, "Run",    0);
     gui_puts(w->x+3, by+12, pkg_status, C_YELLOW, C_WIN_BG);
 }
 
@@ -1242,11 +1248,27 @@ static void pkg_handle_click(winrec_t *w, int mx, int my) {
         }
         return;
     }
-    if (point_in(mx, my, w->x+91, by, 40, 11)) {
+    if (point_in(mx, my, w->x+87, by, 40, 11)) {
         if (pkg_selected >= 0) {
             int r = pkg_remove(pkgwin_name(pkg_selected));
             kstrcpy(pkg_status, r == 0 ? "removed" : "remove failed");
         }
+        return;
+    }
+    if (point_in(mx, my, w->x+129, by, 36, 11)) {
+        if (pkg_selected < 0) { kstrcpy(pkg_status, "select one first"); return; }
+        if (!pkgwin_installed(pkg_selected)) { kstrcpy(pkg_status, "install it first"); return; }
+
+        wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
+
+        char cmdbuf[TERM_COLS+1];
+        kstrcpy(cmdbuf, "exec "); kstrcat(cmdbuf, pkgwin_fname(pkg_selected));
+        char echo[TERM_COLS+3];
+        kstrcpy(echo, "> "); kstrcat(echo, cmdbuf);
+        term_puts_c(echo, TERM_FG_ECHO);
+        term_exec(cmdbuf);
+
+        kstrcpy(pkg_status, "ran in Terminal");
         return;
     }
     for (int i=0;i<total && i<maxrows;i++) {
