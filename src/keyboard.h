@@ -3,6 +3,18 @@
 
 #include <stdint.h>
 
+/* Special (non-ASCII) key codes returned by keyboard_getchar()/blocking()
+   for extended PS/2 scancodes. Cast so the bit pattern survives char's
+   (signed on this target) promotion to int consistently on both the
+   write side (process_scancode) and read side (any comparison). */
+#define KEY_UP    ((char)0xC8)
+#define KEY_DOWN  ((char)0xC9)
+#define KEY_LEFT  ((char)0xCA)
+#define KEY_RIGHT ((char)0xCB)
+#define KEY_HOME  ((char)0xCC)
+#define KEY_END   ((char)0xCD)
+#define KEY_DEL   ((char)0xCE)
+
 void keyboard_init(void);
 char keyboard_getchar(void);
 char keyboard_getchar_blocking(void);
@@ -11,5 +23,11 @@ int  keyboard_ctrl_held(void);
 int  keyboard_alt_held(void);
 
 int keyboard_has_input(void);
+
+/* Scans pending input for a bare Ctrl+C (ASCII 3/ETX) and consumes
+   everything up to and including it if found. Used by sched_waitpid()
+   to let Ctrl+C interrupt a blocked wait - see there for why this only
+   catches the byte when the waited-on child isn't itself mid-read. */
+int keyboard_check_ctrlc(void);
 
 #endif

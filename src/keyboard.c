@@ -2,6 +2,7 @@
 #include "keyboard.h"
 #include "idt.h"
 #include "vga.h"
+#include "kstring.h"
 #include <stdint.h>
 
 #define KB_DATA     0x60
@@ -83,6 +84,19 @@ static void process_scancode(uint8_t sc) {
     if (ext) {
         ext = 0;
         if (sc==0x1D) { ctrl=1; return; }
+        char special = 0;
+        switch (sc) {
+            case 0x48: special = KEY_UP;    break;
+            case 0x50: special = KEY_DOWN;  break;
+            case 0x4B: special = KEY_LEFT;  break;
+            case 0x4D: special = KEY_RIGHT; break;
+            case 0x47: special = KEY_HOME;  break;
+            case 0x4F: special = KEY_END;   break;
+            case 0x53: special = KEY_DEL;   break;
+            default: return;
+        }
+        int next = (bhead+1)%KB_BUF;
+        if (next != btail) { buf[bhead]=special; bhead=next; }
         return;
     }
 
@@ -117,8 +131,11 @@ static char poll_once(void) {
     uint8_t sc = inb(KB_DATA);
     if (sc & 0x80) {
         sc &= 0x7F;
-        if (sc==0x2A||sc==0x36) shift=0;
-        if (sc==0x1D) ctrl=0;
+        if (!ext) {
+            if (sc==0x2A||sc==0x36) shift=0;
+            if (sc==0x1D) ctrl=0;
+        }
+        ext = 0;
         return 0;
     }
 
@@ -192,17 +209,155 @@ char keyboard_getchar_blocking(void) {
     }
 }
 
+/* Shared kernel-side line history: benefits both the CLI shell's own
+   getline calls and any ring-3 program reading via the read() syscall
+   (e.g. kush), since there's only one physical keyboard/session at a
+   time anyway. */
+#define KBD_HIST_MAX  16
+#define KBD_LINE_MAX  256
+static char kbd_hist[KBD_HIST_MAX][KBD_LINE_MAX];
+static int  kbd_hist_count = 0;
+static int  kbd_hist_pos   = -1;   /* -1 = live (not browsing) line */
+static char kbd_hist_stash[KBD_LINE_MAX];
+
+static void kbd_hist_add(const char *line) {
+    if (!*line) return;
+    if (kbd_hist_count > 0 && kstrcmp(kbd_hist[kbd_hist_count-1], line) == 0) { kbd_hist_pos = -1; return; }
+    if (kbd_hist_count < KBD_HIST_MAX) {
+        kstrcpy(kbd_hist[kbd_hist_count++], line);
+    } else {
+        for (int i=0;i<KBD_HIST_MAX-1;i++) kstrcpy(kbd_hist[i], kbd_hist[i+1]);
+        kstrcpy(kbd_hist[KBD_HIST_MAX-1], line);
+    }
+    kbd_hist_pos = -1;
+}
+
+/* First-word tab completion against a fixed vocabulary spanning both the
+   CLI shell's and kush's own builtins - keyboard.c has no visibility into
+   either dispatcher's actual command table, so this is a best-effort,
+   hand-maintained list rather than a fully dynamic one. */
+static const char *kbd_words[] = {
+    "help","clear","ls","cat","cd","pwd","echo","date","history","exit",
+    "run","exec","kush","pkg","ps","meminfo","vmem","kill","gui","hexdump",
+    "write","rm","touch","cp","stat","kum","https","ping","ifconfig","disk",
+    "beep","uptime","whoami","reboot","dls","dcat","dwrite","drm","dformat",
+    "els","ecat","ewrite","erm","eformat","irqinfo","cpuinfo","serial",
+    "proc","wait","banner","calc","motd","snake","logo","uname","hostname",
+    "mouse","dcp","edisk","netrecv","dns","dhcp","source","sort","uniq","wc",
+    "grep","tar","awk","top","crond","ed","vi","fortune",0
+};
+
+static int kbd_tab_complete(char *out, int *len, int *cur) {
+    for (int i=0;i<*cur;i++) if (out[i]==' ') return 0;
+    int wlen = *cur;
+    const char *match = 0;
+    int nmatch = 0;
+    for (int k=0; kbd_words[k]; k++) {
+        const char *w = kbd_words[k];
+        int ok = 1;
+        for (int i=0;i<wlen;i++) if (w[i]!=out[i]) { ok=0; break; }
+        if (ok && (int)kstrlen(w) > wlen) { match = w; nmatch++; }
+        else if (ok && (int)kstrlen(w) == wlen) { nmatch = 0; break; } /* already complete */
+    }
+    if (nmatch == 1) {
+        int wl = (int)kstrlen(match);
+        for (int i=0;i<wl;i++) out[i]=match[i];
+        *len = wl; *cur = wl; out[*len]=0;
+        return 1;
+    }
+    return 0;
+}
+
+static void kbd_redraw(int row, int col, const char *out, int len, int cur) {
+    vga_goto(row, col);
+    for (int i=0;i<len;i++) vga_putchar(out[i]);
+    vga_putchar(' ');
+    vga_goto(row, col+cur);
+}
+
 int keyboard_getline(char *out, int maxlen) {
-    int i = 0;
+    int len = 0, cur = 0;
+    out[0] = 0;
+    int start_row = vga_get_row(), start_col = vga_get_col();
+    if (maxlen > KBD_LINE_MAX) maxlen = KBD_LINE_MAX;
+
     for (;;) {
         char c = keyboard_getchar_blocking();
         if (!c) continue;
-        if (c == '\n') { out[i]=0; vga_putchar('\n'); return i; }
-        if (c == '\b') { if (i>0) { i--; vga_putchar('\b'); } }
-        else if (i < maxlen-1) { out[i++]=c; vga_putchar(c); }
+
+        if (c == '\n') {
+            out[len] = 0;
+            vga_goto(start_row, start_col+len);
+            vga_putchar('\n');
+            kbd_hist_add(out);
+            return len;
+        }
+        else if (c == '\b') {
+            if (cur > 0) {
+                for (int i=cur-1;i<len-1;i++) out[i]=out[i+1];
+                cur--; len--; out[len]=0;
+                kbd_redraw(start_row, start_col, out, len, cur);
+            }
+        }
+        else if (c == KEY_DEL) {
+            if (cur < len) {
+                for (int i=cur;i<len-1;i++) out[i]=out[i+1];
+                len--; out[len]=0;
+                kbd_redraw(start_row, start_col, out, len, cur);
+            }
+        }
+        else if (c == KEY_LEFT)  { if (cur>0) { cur--; vga_goto(start_row, start_col+cur); } }
+        else if (c == KEY_RIGHT) { if (cur<len) { cur++; vga_goto(start_row, start_col+cur); } }
+        else if (c == KEY_HOME)  { cur = 0; vga_goto(start_row, start_col); }
+        else if (c == KEY_END)   { cur = len; vga_goto(start_row, start_col+len); }
+        else if (c == KEY_UP) {
+            if (kbd_hist_count == 0) continue;
+            if (kbd_hist_pos == -1) { out[len]=0; kstrcpy(kbd_hist_stash, out); kbd_hist_pos = kbd_hist_count-1; }
+            else if (kbd_hist_pos > 0) kbd_hist_pos--;
+            kstrcpy(out, kbd_hist[kbd_hist_pos]);
+            len = cur = (int)kstrlen(out);
+            kbd_redraw(start_row, start_col, out, len, cur);
+        }
+        else if (c == KEY_DOWN) {
+            if (kbd_hist_pos == -1) continue;
+            kbd_hist_pos++;
+            if (kbd_hist_pos >= kbd_hist_count) { kbd_hist_pos = -1; kstrcpy(out, kbd_hist_stash); }
+            else kstrcpy(out, kbd_hist[kbd_hist_pos]);
+            len = cur = (int)kstrlen(out);
+            kbd_redraw(start_row, start_col, out, len, cur);
+        }
+        else if (c == '\t') {
+            if (kbd_tab_complete(out, &len, &cur))
+                kbd_redraw(start_row, start_col, out, len, cur);
+        }
+        else if (len < maxlen-1 && c >= 32 && (uint8_t)c < 127) {
+            for (int i=len;i>cur;i--) out[i]=out[i-1];
+            out[cur]=c; len++; cur++; out[len]=0;
+            kbd_redraw(start_row, start_col, out, len, cur);
+        }
     }
 }
 
 int keyboard_ctrl_held(void) { return ctrl; }
 int keyboard_alt_held(void)  { return 0;   }
 int keyboard_has_input(void) { return bhead != btail; }
+
+int keyboard_check_ctrlc(void) {
+    /* poll_once() pops+returns a char immediately if the scancode it
+       just processed produced one. If it's not Ctrl+C, push it back to
+       the front of the queue - this runs inside sched_waitpid()'s poll
+       loop, and eating a keystroke a foreground program is waiting to
+       read (instead of just checking for the one byte we care about)
+       would be a real regression, not just a missed interrupt. */
+    char c = poll_once();
+    if (c == 3) return 1;
+    if (c) { btail = (btail - 1 + KB_BUF) % KB_BUF; buf[btail] = c; }
+
+    for (int idx = btail; idx != bhead; idx = (idx+1)%KB_BUF) {
+        if (buf[idx] == 3) {
+            btail = (idx+1) % KB_BUF;
+            return 1;
+        }
+    }
+    return 0;
+}
