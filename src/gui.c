@@ -16,6 +16,8 @@
 #include "pkg.h"
 #include "pkgnet.h"
 #include "serial.h"
+#include "elf.h"
+#include "vfs.h"
 #include <stdint.h>
 
 static inline void outb(uint16_t p, uint8_t v) { __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p)); }
@@ -652,6 +654,49 @@ static void term_puts_c(const char *s, uint8_t color) {
 
 static void term_puts(const char *s) { term_puts_c(s, TERM_FG); }
 
+/* captures a spawned ring-3 process's stdout/stderr into the terminal -
+   fd 1/2 normally go to vga_putchar (VGA text mode), which isn't the
+   visible surface while we're in graphics mode, so nothing would show up
+   otherwise. registered as the stdout sink only for the duration of an
+   exec/run command (see below), one line at a time. */
+static char    term_exec_linebuf[TERM_COLS+1];
+static int     term_exec_linelen = 0;
+
+static void term_exec_output(char c) {
+    if (c == '\n') {
+        term_exec_linebuf[term_exec_linelen] = 0;
+        term_puts(term_exec_linebuf);
+        term_exec_linelen = 0;
+    } else if (c != '\r' && term_exec_linelen < TERM_COLS) {
+        term_exec_linebuf[term_exec_linelen++] = c;
+    }
+}
+
+static void term_run_elf(elf_load_result_t *r, const char *name) {
+    if (r->error != 0) {
+        char line[TERM_COLS+1];
+        kstrcpy(line, "bad ELF, error "); kitoa((uint32_t)(-r->error), line+kstrlen(line), 10);
+        term_puts_c(line, TERM_FG_ERR);
+        return;
+    }
+    int pid = elf_spawn(name, r);
+    if (pid < 0) { term_puts_c("spawn failed", TERM_FG_ERR); return; }
+
+    term_exec_linelen = 0;
+    vfs_set_stdout_sink(term_exec_output);
+    int code = sched_waitpid(pid);
+    vfs_set_stdout_sink(0);
+    if (term_exec_linelen > 0) {
+        term_exec_linebuf[term_exec_linelen] = 0;
+        term_puts(term_exec_linebuf);
+        term_exec_linelen = 0;
+    }
+
+    char line[TERM_COLS+1];
+    kstrcpy(line, "exited, code "); kitoa((uint32_t)code, line+kstrlen(line), 10);
+    term_puts_c(line, TERM_FG_INFO);
+}
+
 static void term_split(const char *line, char *first, char *rest, int firstlen) {
     int i=0;
     while (*line && *line!=' ' && i<firstlen-1) first[i++]=*line++;
@@ -718,6 +763,7 @@ static void term_exec(const char *cmd) {
         term_puts_c("ls cat touch write rm <f>", TERM_FG_INFO);
         term_puts_c("meminfo cpuinfo ps kill whoami", TERM_FG_INFO);
         term_puts_c("echo calc pkg exit", TERM_FG_INFO);
+        term_puts_c("run <pkg>  exec <file.elf>", TERM_FG_INFO);
     } else if (kstrcmp(cmd,"date")==0) {
         rtc_time_t t = rtc_read();
         char buf[24];
@@ -793,6 +839,21 @@ static void term_exec(const char *cmd) {
         else if (r==-1) term_puts_c("Unknown package", TERM_FG_ERR);
         else if (r==-2) term_puts_c("No disk mounted", TERM_FG_ERR);
         else term_puts_c("Not installed", TERM_FG_ERR);
+    } else if (kstartswith(cmd,"run ")) {
+        int i = pkg_find_index(cmd+4);
+        if (i < 0) { term_puts_c("Unknown program (try 'pkg install' first)", TERM_FG_ERR); }
+        else {
+            const uint8_t *start, *end;
+            pkg_blob_at(i, &start, &end);
+            elf_load_result_t r = elf_load_mem(start, (uint32_t)(end - start));
+            term_run_elf(&r, cmd+4);
+        }
+    } else if (kstartswith(cmd,"exec ")) {
+        if (!fat12_mounted()) { term_puts_c("No disk mounted", TERM_FG_ERR); }
+        else {
+            elf_load_result_t r = elf_load_disk(cmd+5);
+            term_run_elf(&r, cmd+5);
+        }
     } else if (kstrcmp(cmd,"ls")==0) {
         if (!fat12_mounted()) {
             term_puts_c("No disk mounted", TERM_FG_ERR);

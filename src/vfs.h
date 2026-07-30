@@ -80,4 +80,12 @@ void vfs_init_stdio(void);
 
 vfs_fd_t *vfs_get_fd(int fd);
 
+/* When set, stdout/stderr (fd 1/2) writes go here character-by-character
+   instead of vga_putchar() - lets a caller (the GUI, mainly) capture a
+   ring-3 process's output somewhere other than VGA text mode, which isn't
+   the visible surface while in graphics mode. Pass 0 to go back to the
+   normal vga_putchar path. */
+typedef void (*vfs_stdout_sink_t)(char c);
+void vfs_set_stdout_sink(vfs_stdout_sink_t sink);
+
 #endif
