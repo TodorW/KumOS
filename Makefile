@@ -21,13 +21,14 @@ KERN_OBJS = \
     src/signal.o src/net.o src/procfs.o src/users.o \
     src/dns.o src/dmesg.o src/dhcp.o src/ext2.o src/swap.o \
     src/syscall.o src/elf.o \
-    src/serial.o src/rtc.o src/mouse.o src/gui.o src/pkg.o src/kernel.o
+    src/serial.o src/rtc.o src/mouse.o src/gui.o src/pkg.o src/pkgnet.o src/kernel.o
 
 USER_PROGS = \
     user/hello.elf user/counter.elf user/cat.elf user/sysinfo.elf \
     user/kush.elf user/ed.elf user/vi.elf user/top.elf \
     user/crond.elf user/http.elf user/grep.elf user/tar.elf \
-    user/wc.elf user/sort.elf user/uniq.elf user/awk.elf user/echo.elf
+    user/wc.elf user/sort.elf user/uniq.elf user/awk.elf user/echo.elf \
+    user/fortune.elf
 
 PKG_NAMES = hello counter cat sysinfo kush ed vi top crond http grep tar wc sort uniq awk echo
 PKG_BLOBS = $(addprefix user/,$(addsuffix _blob.o,$(PKG_NAMES)))
@@ -60,13 +61,19 @@ run: iso ext2.img
 run-net: iso ext2.img
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
 	    -boot order=d -cdrom kumos.iso -drive file=disk.img,format=raw,if=ide -drive file=ext2.img,format=raw,if=ide -m 128M -vga std -no-reboot \
-	    -nic user
+	    -nic user,model=rtl8139
 run-serial: iso ext2.img
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
 	    -boot order=d -cdrom kumos.iso -drive file=disk.img,format=raw,if=ide -drive file=ext2.img,format=raw,if=ide -m 128M -vga std -no-reboot \
 	    -serial stdio
 test: iso ext2.img
 	@./smoke_test.sh
+pkg-repo: user/fortune.elf
+	@mkdir -p pkg-repo
+	@cp user/fortune.elf pkg-repo/FORTUNE.ELF
+	@echo "fortune|FORTUNE.ELF|Random one-liner (network pkg demo)" > pkg-repo/index.txt
+	@echo "pkg-repo/ ready. Serve it with: python3 -m http.server 8080 --directory pkg-repo"
+	@echo "Then in KumOS: pkg update && pkg install fortune"
 clean:
 	@rm -f $(KERN_OBJS) $(PKG_BLOBS) kumos.bin kumos.iso iso/boot/kumos.bin user/*.elf
-.PHONY: all iso run run-net run-serial test clean user-programs
+.PHONY: all iso run run-net run-serial test clean user-programs pkg-repo

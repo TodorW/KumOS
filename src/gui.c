@@ -14,6 +14,7 @@
 #include "users.h"
 #include "signal.h"
 #include "pkg.h"
+#include "pkgnet.h"
 #include <stdint.h>
 
 static inline void outb(uint16_t p, uint8_t v) { __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p)); }
@@ -139,7 +140,7 @@ static void set_mode3h(void) {
 
 static void set_palette(void) {
 
-    struct { uint8_t r,g,b; } pal[32] = {
+    struct { uint8_t r,g,b; } pal[64] = {
         {0,0,0},
         {0,0,42},
         {0,42,0},
@@ -172,15 +173,27 @@ static void set_palette(void) {
         {50,50,55},
         {20,32,56},
         {63,63,0},
+
+        {18,28,58}, {16,25,54}, {14,22,50}, {12,20,46},
+        {10,18,43}, {9,17,41},  {8,16,40},  {6,13,35},
+
+        {14,18,26}, {13,16,24}, {12,15,22}, {11,14,20},
+        {10,13,19}, {9,11,17},  {8,10,15},  {6,9,14},
+
+        {22,34,58}, {19,30,54}, {16,26,50}, {13,22,45},
+        {10,18,40}, {7,14,34},  {5,10,28},  {2,6,20},
+
+        {20,55,63}, {17,50,60}, {14,45,57}, {11,40,54},
+        {8,35,50},  {6,30,46},  {4,25,42},  {2,20,38},
     };
     outb(0x3C8, 0);
-    for (int i = 0; i < 32; i++) {
+    for (int i = 0; i < 64; i++) {
         outb(0x3C9, pal[i].r);
         outb(0x3C9, pal[i].g);
         outb(0x3C9, pal[i].b);
     }
 
-    for (int i = 32; i < 256; i++) {
+    for (int i = 64; i < 256; i++) {
         uint8_t v = (uint8_t)(i / 4);
         outb(0x3C9, v); outb(0x3C9, v); outb(0x3C9, v);
     }
@@ -287,22 +300,49 @@ void gui_printf(int x, int y, uint8_t fg, uint8_t bg, const char *fmt, ...) {
     gui_puts(x, y, buf, fg, bg);
 }
 
+static void fill_rounded(int x, int y, int w, int h, uint8_t c) {
+    for (int row = 0; row < h; row++) {
+        int inset = (row==0||row==h-1) ? 2 : (row==1||row==h-2) ? 1 : 0;
+        int rw = w - 2*inset;
+        if (rw > 0) gui_hline(x+inset, y+row, rw, c);
+    }
+}
+
+static void fill_rounded_grad(int x, int y, int w, int h, uint8_t grad_base, int grad_n) {
+    for (int row = 0; row < h; row++) {
+        int inset = (row==0||row==h-1) ? 2 : (row==1||row==h-2) ? 1 : 0;
+        int rw = w - 2*inset;
+        int band = (row * grad_n) / (h > 1 ? h : 1);
+        if (band >= grad_n) band = grad_n-1;
+        if (rw > 0) gui_hline(x+inset, y+row, rw, (uint8_t)(grad_base+band));
+    }
+}
+
+static void outline_rounded(int x, int y, int w, int h, uint8_t c) {
+    gui_hline(x+2, y,     w-4, c);
+    gui_hline(x+2, y+h-1, w-4, c);
+    gui_vline(x,   y+2,   h-4, c);
+    gui_vline(x+w-1, y+2, h-4, c);
+    gui_pixel(x+1,   y+1,   c); gui_pixel(x+w-2, y+1,   c);
+    gui_pixel(x+1,   y+h-2, c); gui_pixel(x+w-2, y+h-2, c);
+}
+
 void gui_window(int x, int y, int w, int h, const char *title) {
 
-    gui_rect_fill(x+3, y+3, w, h, C_SHADOW);
+    fill_rounded(x+3, y+3, w, h, C_SHADOW);
 
-    gui_rect_fill(x, y, w, h, C_WIN_BG);
+    fill_rounded(x, y, w, h, C_WIN_BG);
 
-    gui_rect_fill(x, y, w, 11, C_WIN_TITLE);
+    fill_rounded_grad(x, y, w, 11, C_GRAD_TITLE, 8);
 
-    gui_rect(x, y, w, h, C_WIN_BORDER);
+    outline_rounded(x, y, w, h, C_WIN_BORDER);
 
-    gui_puts(x+4, y+2, title, C_LIGHT_CYAN, C_WIN_TITLE);
+    gui_puts(x+4, y+2, title, C_LIGHT_CYAN, C_GRAD_TITLE+3);
 
     gui_rect_fill(x+w-11, y+1, 9, 9, C_RED);
     gui_puts(x+w-9, y+2, "X", C_WHITE, C_RED);
 
-    gui_rect_fill(x+w-22, y+1, 9, 9, C_BUTTON_HI);
+    gui_rect_fill(x+w-22, y+1, 9, 9, C_GRAD_ACCENT+2);
     gui_hline(x+w-20, y+6, 5, C_WHITE);
 
     gui_line(x+w-6, y+h-2, x+w-2, y+h-6, C_WIN_BORDER);
@@ -319,14 +359,69 @@ void gui_button(int x, int y, int w, int h, const char *label, int pressed) {
     gui_puts(tx, ty, label, C_WHITE, bg);
 }
 
-void gui_icon(int x, int y, const char *label, uint8_t icon_color) {
+static void icon_glyph(int x, int y, icon_kind_t kind) {
+    /* x,y = top-left of a roughly 20x14 drawing area inside the tile */
+    switch (kind) {
+    case ICON_TERM:
+        gui_rect_fill(x, y, 20, 14, C_BLACK);
+        gui_line(x+3, y+4, x+7, y+7, C_LIGHT_GREEN);
+        gui_line(x+3, y+10, x+7, y+7, C_LIGHT_GREEN);
+        gui_hline(x+9, y+10, 7, C_LIGHT_GREEN);
+        break;
+    case ICON_FOLDER:
+        gui_rect_fill(x, y+3, 8, 3, C_YELLOW);
+        gui_rect_fill(x, y+5, 20, 9, C_YELLOW);
+        gui_rect(x, y+5, 20, 9, C_BROWN);
+        break;
+    case ICON_MONITOR:
+        gui_rect_fill(x, y, 20, 10, C_BLACK);
+        gui_rect(x, y, 20, 10, C_LIGHT_GREY);
+        gui_hline(x+2, y+2, 6, C_LIGHT_GREEN);
+        gui_hline(x+2, y+5, 10, C_LIGHT_GREEN);
+        gui_rect_fill(x+8, y+10, 4, 2, C_LIGHT_GREY);
+        gui_hline(x+5, y+13, 10, C_LIGHT_GREY);
+        break;
+    case ICON_CALC:
+        gui_rect_fill(x, y, 20, 14, C_WHITE);
+        gui_rect_fill(x+2, y+2, 16, 4, C_LIGHT_GREEN);
+        for (int r=0;r<2;r++)
+            for (int c=0;c<4;c++)
+                gui_rect_fill(x+2+c*4, y+8+r*4, 3, 3, C_DARK_GREY);
+        break;
+    case ICON_NOTE:
+        gui_rect_fill(x, y, 20, 14, C_WHITE);
+        gui_hline(x+3, y+3, 14, C_DARK_GREY);
+        gui_hline(x+3, y+7, 14, C_DARK_GREY);
+        gui_hline(x+3, y+11, 9, C_DARK_GREY);
+        break;
+    case ICON_EXIT:
+        gui_rect(x+2, y, 12, 14, C_LIGHT_GREY);
+        gui_vline(x+6, y+3, 8, C_LIGHT_GREY);
+        gui_hline(x+13, y+7, 7, C_LIGHT_RED);
+        gui_line(x+17, y+4, x+20, y+7, C_LIGHT_RED);
+        gui_line(x+17, y+10, x+20, y+7, C_LIGHT_RED);
+        break;
+    case ICON_PKG:
+        gui_rect_fill(x+1, y+3, 18, 11, C_BROWN);
+        gui_line(x+1, y+3, x+10, y, C_LIGHT_GREY);
+        gui_line(x+19, y+3, x+10, y, C_LIGHT_GREY);
+        gui_hline(x+8, y+7, 4, C_YELLOW);
+        gui_vline(x+9, y+5, 4, C_YELLOW);
+        break;
+    }
+}
 
-    gui_rect_fill(x, y, 28, 20, icon_color);
-    gui_rect(x, y, 28, 20, C_LIGHT_GREY);
+void gui_icon(int x, int y, const char *label, uint8_t icon_color, icon_kind_t kind) {
 
-    int lx = x + (28 - (int)kstrlen(label)*8)/2;
+    fill_rounded(x+1, y+1, 26, 18, C_SHADOW);
+    fill_rounded(x, y, 26, 18, icon_color);
+    outline_rounded(x, y, 26, 18, C_WIN_BORDER);
+
+    icon_glyph(x+3, y+2, kind);
+
+    int lx = x + (26 - (int)kstrlen(label)*8)/2;
     if (lx < x) lx = x;
-    gui_puts(lx, y+22, label, C_WHITE, C_DESKTOP);
+    gui_puts(lx, y+19, label, C_WHITE, C_DESKTOP);
 }
 
 #define CUR_W 8
@@ -361,11 +456,11 @@ static int point_in(int px, int py, int x, int y, int w, int h) {
 }
 
 #define ICON_START_Y 12
-#define ICON_SLOT    30
+#define ICON_SLOT    26
 
 typedef enum {
     WIN_TERMINAL=0, WIN_FILES=1, WIN_SYSMON=2,
-    WIN_CALC=3, WIN_EDITOR=4, WIN_COUNT=5
+    WIN_CALC=3, WIN_EDITOR=4, WIN_PKG=5, WIN_COUNT=6
 } wintype_t;
 
 typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
@@ -381,6 +476,7 @@ static const char *win_title(int t) {
         case WIN_SYSMON:   return "System Monitor";
         case WIN_CALC:     return "Calculator";
         case WIN_EDITOR:   return "Notepad";
+        case WIN_PKG:      return "Packages";
     }
     return "";
 }
@@ -405,6 +501,7 @@ static int wm_topmost(void) {
 }
 
 static void files_refresh(void);
+static void pkg_refresh(void);
 
 static void wm_open(int t, int defx, int defy, int defw, int defh) {
     if (!wins[t].active) {
@@ -413,6 +510,7 @@ static void wm_open(int t, int defx, int defy, int defw, int defh) {
         wins[t].min_w = defw; wins[t].min_h = defh;
         wins[t].minimized = 0;
         if (t == WIN_FILES) files_refresh();
+        if (t == WIN_PKG) pkg_refresh();
     }
     wins[t].minimized = 0;
     wm_push_front(t);
@@ -430,24 +528,31 @@ static int tb_tab_x1[TB_TAB_MAX];
 static int tb_tab_count = 0;
 
 void gui_draw_taskbar(void) {
-    gui_rect_fill(0, 0, GUI_WIDTH, 10, C_TASKBAR);
-    gui_hline(0, 9, GUI_WIDTH, C_WIN_BORDER);
-    gui_puts(2, 1, "KumOS", C_LIGHT_CYAN, C_TASKBAR);
+    for (int y=0;y<9;y++) {
+        int band = (y*8)/9; if (band>7) band=7;
+        gui_hline(0, y, GUI_WIDTH, (uint8_t)(C_GRAD_TASKBAR+band));
+    }
+    gui_hline(0, 9, GUI_WIDTH, (uint8_t)(C_GRAD_ACCENT+5));
+
+    fill_rounded(1, 1, 32, 8, (uint8_t)(C_GRAD_ACCENT+2));
+    gui_puts(4, 1, "KumOS", C_WHITE, (uint8_t)(C_GRAD_ACCENT+2));
 
     tb_tab_count = 0;
-    int tx = 36;
+    int tx = 37;
     int top = wm_topmost();
     for (int i=0;i<zcount;i++) {
         int t = zorder[i];
         if (!wins[t].active) continue;
         int tw = (int)kstrlen(win_title(t))*8 + 6;
-        uint8_t bg = (t==top && !wins[t].minimized) ? C_BUTTON_HI : C_TASKBAR;
+        int active = (t==top && !wins[t].minimized);
+        uint8_t bg = active ? (uint8_t)(C_GRAD_ACCENT+3) : (uint8_t)(C_GRAD_TASKBAR+1);
         uint8_t fg = wins[t].minimized ? C_LIGHT_GREY : C_WHITE;
-        gui_rect_fill(tx, 0, tw, 9, bg);
+        fill_rounded(tx, 0, tw, 9, bg);
         gui_puts(tx+3, 1, win_title(t), fg, bg);
+        if (active) gui_hline(tx+2, 8, tw-4, C_WHITE);
         tb_tab_type[tb_tab_count]=t; tb_tab_x0[tb_tab_count]=tx; tb_tab_x1[tb_tab_count]=tx+tw;
         tb_tab_count++;
-        tx += tw + 2;
+        tx += tw + 3;
     }
 
     rtc_time_t t = rtc_read();
@@ -459,14 +564,14 @@ void gui_draw_taskbar(void) {
     timebuf[5]=':';
     timebuf[6]='0'+t.second/10; timebuf[7]='0'+t.second%10;
     timebuf[8]=0;
-    gui_puts(GUI_WIDTH-67, 1, timebuf, C_YELLOW, C_TASKBAR);
+    gui_puts(GUI_WIDTH-67, 1, timebuf, C_YELLOW, C_GRAD_TASKBAR);
 
     char ubuf[20];
     uint32_t up=timer_seconds();
     int ui=17; ubuf[18]='s'; ubuf[19]=0;
     if(!up){ubuf[ui--]='0';}else{uint32_t u=up;while(u){ubuf[ui--]='0'+u%10;u/=10;}}
     ubuf[ui--]='p'; ubuf[ui--]='u';
-    gui_puts(GUI_WIDTH-130, 1, ubuf+ui+1, C_LIGHT_GREY, C_TASKBAR);
+    gui_puts(GUI_WIDTH-130, 1, ubuf+ui+1, C_LIGHT_GREY, C_GRAD_TASKBAR);
 }
 
 static int taskbar_hit(int mx, int my) {
@@ -478,17 +583,20 @@ static int taskbar_hit(int mx, int my) {
 
 void gui_draw_desktop(void) {
 
+    int dh = GUI_HEIGHT - 10;
     for (int y=10;y<GUI_HEIGHT;y++) {
-        uint8_t c = (y < 120) ? C_DESKTOP : C_DARK_BLUE;
-        gui_hline(0, y, GUI_WIDTH, c);
+        int band = ((y-10) * 8) / dh;
+        if (band > 7) band = 7;
+        gui_hline(0, y, GUI_WIDTH, (uint8_t)(C_GRAD_SKY+band));
     }
 
-    gui_icon(8, ICON_START_Y + 0*ICON_SLOT, "Term",  C_TEAL);
-    gui_icon(8, ICON_START_Y + 1*ICON_SLOT, "Files", C_NAVY);
-    gui_icon(8, ICON_START_Y + 2*ICON_SLOT, "Sys",   C_PURPLE);
-    gui_icon(8, ICON_START_Y + 3*ICON_SLOT, "Calc",  C_BROWN);
-    gui_icon(8, ICON_START_Y + 4*ICON_SLOT, "Note",  C_LIGHT_BLUE);
-    gui_icon(8, ICON_START_Y + 5*ICON_SLOT, "Exit",  C_DARK_GREY);
+    gui_icon(8, ICON_START_Y + 0*ICON_SLOT, "Term",  C_TEAL,       ICON_TERM);
+    gui_icon(8, ICON_START_Y + 1*ICON_SLOT, "Files", C_NAVY,       ICON_FOLDER);
+    gui_icon(8, ICON_START_Y + 2*ICON_SLOT, "Sys",   C_PURPLE,     ICON_MONITOR);
+    gui_icon(8, ICON_START_Y + 3*ICON_SLOT, "Calc",  C_BROWN,      ICON_CALC);
+    gui_icon(8, ICON_START_Y + 4*ICON_SLOT, "Note",  C_LIGHT_BLUE, ICON_NOTE);
+    gui_icon(8, ICON_START_Y + 5*ICON_SLOT, "Pkgs",  C_TEAL,       ICON_PKG);
+    gui_icon(8, ICON_START_Y + 6*ICON_SLOT, "Exit",  C_DARK_GREY,  ICON_EXIT);
 
     gui_printf(52, 18, C_LIGHT_GREY, C_DESKTOP,
                "Click icons to open apps");
@@ -1006,6 +1114,87 @@ static void editor_handle_click(winrec_t *w, int mx, int my) {
     }
 }
 
+static int  pkg_selected = -1;
+static char pkg_status[24] = "";
+
+static void pkg_refresh(void) { pkg_selected = -1; pkg_status[0] = 0; }
+
+static int pkgwin_total(void) { return pkg_count() + pkgnet_count(); }
+
+static const char *pkgwin_name(int i) {
+    int n = pkg_count();
+    return (i < n) ? pkg_name_at(i) : pkgnet_name_at(i-n);
+}
+
+static int pkgwin_installed(int i) {
+    int n = pkg_count();
+    if (i < n) return pkg_is_installed(i);
+    if (!fat12_mounted()) return 0;
+    fat12_entry_t ents[64];
+    int cnt = fat12_list(ents, 64);
+    const char *fname = pkgnet_fname_at(i-n);
+    for (int j=0;j<cnt;j++) if (kstrcmp(ents[j].name, fname)==0) return 1;
+    return 0;
+}
+
+#define PKGWIN_ROW_H 9
+
+static void render_pkg(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "Packages");
+    gui_rect_fill(w->x+1, w->y+12, w->w-2, w->h-13, C_BLACK);
+
+    int cx = w->x+3, cy = w->y+13;
+    int total = pkgwin_total();
+    int by = w->y+w->h-20;
+    int maxrows = (by - cy) / PKGWIN_ROW_H;
+
+    for (int i=0;i<total && i<maxrows;i++) {
+        int ry = cy + i*PKGWIN_ROW_H - 1;
+        uint8_t fg = (i==pkg_selected) ? C_BLACK : (pkgwin_installed(i) ? C_LIGHT_GREEN : C_LIGHT_GREY);
+        uint8_t bg = (i==pkg_selected) ? (uint8_t)(C_GRAD_ACCENT+3) : C_BLACK;
+        if (i==pkg_selected) gui_rect_fill(w->x+1, ry, w->w-2, PKGWIN_ROW_H, bg);
+        gui_puts(cx, cy+i*PKGWIN_ROW_H, pkgwin_name(i), fg, bg);
+    }
+
+    gui_button(w->x+3,  by, 44, 11, "Update", 0);
+    gui_button(w->x+49, by, 40, 11, "Instl",  0);
+    gui_button(w->x+91, by, 40, 11, "Rmove",  0);
+    gui_puts(w->x+3, by+12, pkg_status, C_YELLOW, C_WIN_BG);
+}
+
+static void pkg_handle_click(winrec_t *w, int mx, int my) {
+    int cy = w->y+13;
+    int total = pkgwin_total();
+    int by = w->y+w->h-20;
+    int maxrows = (by - cy) / PKGWIN_ROW_H;
+
+    if (point_in(mx, my, w->x+3, by, 44, 11)) {
+        int n = pkgnet_update();
+        kstrcpy(pkg_status, n < 0 ? "update failed" : "index updated");
+        return;
+    }
+    if (point_in(mx, my, w->x+49, by, 40, 11)) {
+        if (pkg_selected >= 0) {
+            const char *nm = pkgwin_name(pkg_selected);
+            int r = pkg_install(nm);
+            if (r == -1) r = pkgnet_install(nm);
+            kstrcpy(pkg_status, r == 0 ? "installed" : "install failed");
+        }
+        return;
+    }
+    if (point_in(mx, my, w->x+91, by, 40, 11)) {
+        if (pkg_selected >= 0) {
+            int r = pkg_remove(pkgwin_name(pkg_selected));
+            kstrcpy(pkg_status, r == 0 ? "removed" : "remove failed");
+        }
+        return;
+    }
+    for (int i=0;i<total && i<maxrows;i++) {
+        int ry = cy + i*PKGWIN_ROW_H - 1;
+        if (point_in(mx, my, w->x+1, ry, w->w-2, PKGWIN_ROW_H)) { pkg_selected = i; return; }
+    }
+}
+
 void gui_run(void) {
     gui_init();
     term_init();
@@ -1033,6 +1222,7 @@ void gui_run(void) {
             else if (t==WIN_SYSMON) render_sysmon(w);
             else if (t==WIN_CALC) render_calc(w);
             else if (t==WIN_EDITOR) render_editor(w);
+            else if (t==WIN_PKG) render_pkg(w);
         }
 
         gui_draw_taskbar();
@@ -1112,6 +1302,8 @@ void gui_run(void) {
                     calc_handle_click(w, mx, my);
                 } else if (hit == WIN_EDITOR) {
                     editor_handle_click(w, mx, my);
+                } else if (hit == WIN_PKG) {
+                    pkg_handle_click(w, mx, my);
                 }
             } else if (my < 10) {
                 int th = taskbar_hit(mx, my);
@@ -1123,7 +1315,8 @@ void gui_run(void) {
                 else if (iconidx==2) wm_open(WIN_SYSMON,  130, 20, 175, 150);
                 else if (iconidx==3) wm_open(WIN_CALC,     60, 40, 110, 150);
                 else if (iconidx==4) wm_open(WIN_EDITOR,   70, 25, 210, 160);
-                else if (iconidx==5) running = 0;
+                else if (iconidx==5) wm_open(WIN_PKG,      45, 20, 170, 140);
+                else if (iconidx==6) running = 0;
             }
         }
 

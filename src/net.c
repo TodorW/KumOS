@@ -208,36 +208,36 @@ int net_send_udp(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
 void net_poll(void) {
     if (!rtl_ready_flag) return;
     uint16_t isr = inw(rtl_iobase+RTL_ISR);
-    if (!(isr & 0x01)) return;
-    outw(rtl_iobase+RTL_ISR, isr);
-    uint16_t rx_ptr=0;
+    if (isr) outw(rtl_iobase+RTL_ISR, isr);
+
     while (!(inb(rtl_iobase+RTL_CMD)&0x01)) {
         uint16_t off = inw(rtl_iobase+RTL_CAPR)+16;
         uint8_t *p = rx_buf + (off % (8192+16));
         uint16_t pkt_len = *(uint16_t*)(p+2);
         if (pkt_len==0||pkt_len>1514) break;
+        /* pkt_len as reported by the NIC includes the trailing 4-byte
+           CRC, which isn't part of the actual frame data */
+        uint16_t frame_len = (uint16_t)(pkt_len >= 4 ? pkt_len - 4 : 0);
         uint8_t *payload = p+4;
         eth_hdr_t *eth=(eth_hdr_t*)payload;
         uint16_t etype=NET_HTONS(eth->type);
-        if (etype==ETH_P_ARP && pkt_len>=14+sizeof(arp_pkt_t)) {
+        if (etype==ETH_P_ARP && frame_len>=14+sizeof(arp_pkt_t)) {
             arp_pkt_t *arp=(arp_pkt_t*)(payload+14);
             arp_learn(NET_HTONL(arp->sender_ip), arp->sender_mac);
-        } else if (etype==ETH_P_IP && pkt_len>=14+20) {
+        } else if (etype==ETH_P_IP && frame_len>=14+20) {
             ip_hdr_t *ip=(ip_hdr_t*)(payload+14);
-            if (ip->protocol==IPPROTO_UDP && pkt_len>=14+20+8) {
+            if (ip->protocol==IPPROTO_UDP && frame_len>=14+20+8) {
                 if ((rx_head+1)%RX_RING_SIZE != rx_tail) {
-                    kmemcpy(rx_ring[rx_head].buf, payload, pkt_len);
-                    rx_ring[rx_head].len = pkt_len;
+                    kmemcpy(rx_ring[rx_head].buf, payload, frame_len);
+                    rx_ring[rx_head].len = frame_len;
                     rx_head=(rx_head+1)%RX_RING_SIZE;
                 }
-            } else if (ip->protocol==IPPROTO_TCP && pkt_len>=14+20+20) {
-                tcp_process(payload, pkt_len);
+            } else if (ip->protocol==IPPROTO_TCP && frame_len>=14+20+20) {
+                tcp_process(payload, frame_len);
             }
         }
-        rx_ptr = (uint16_t)((off + pkt_len + 4 + 3) & ~3);
+        uint16_t rx_ptr = (uint16_t)((off + pkt_len + 4 + 3) & ~3);
         outw(rtl_iobase+RTL_CAPR, (uint16_t)(rx_ptr-16));
-        (void)rx_ptr;
-        break;
     }
 }
 
@@ -278,7 +278,7 @@ void net_print_info(void) {
 }
 
 #define TCP_MAX_SOCKETS  8
-#define TCP_BUF_SIZE     4096
+#define TCP_BUF_SIZE     16384
 
 typedef enum {
     TCP_CLOSED=0, TCP_SYN_SENT, TCP_SYN_RECV,
@@ -312,6 +312,18 @@ typedef struct {
 #define TCP_RST  0x04
 #define TCP_ACK  0x10
 
+static uint16_t tcp_checksum(uint32_t src_ip_net, uint32_t dst_ip_net,
+                              const void *tcp_seg, uint16_t tcp_len) {
+    uint8_t buf[12 + 1480];
+    kmemcpy(buf+0, &src_ip_net, 4);
+    kmemcpy(buf+4, &dst_ip_net, 4);
+    buf[8] = 0; buf[9] = IPPROTO_TCP;
+    uint16_t tlen_n = NET_HTONS(tcp_len);
+    kmemcpy(buf+10, &tlen_n, 2);
+    kmemcpy(buf+12, tcp_seg, tcp_len);
+    return ip_checksum(buf, (uint32_t)(12 + tcp_len));
+}
+
 static void tcp_send_raw(tcp_socket_t *s, uint8_t flags,
                          const void *data, uint16_t dlen) {
     uint8_t pkt[1500]; kmemset(pkt,0,sizeof(pkt));
@@ -340,8 +352,14 @@ static void tcp_send_raw(tcp_socket_t *s, uint8_t flags,
     tcp->ack_seq  = (flags&TCP_ACK)?NET_HTONL(s->ack):0;
     tcp->data_offset = 0x50;
     tcp->flags    = flags;
-    tcp->window   = NET_HTONS(4096);
+    {
+        uint32_t used = (s->rbuf_head - s->rbuf_tail + TCP_BUF_SIZE) % TCP_BUF_SIZE;
+        uint32_t free_space = TCP_BUF_SIZE - used - 1;
+        tcp->window = NET_HTONS((uint16_t)free_space);
+    }
     if (dlen) kmemcpy(pkt+14+20+20, data, dlen);
+    tcp->checksum = 0;
+    tcp->checksum = tcp_checksum(ip->src_ip, ip->dst_ip, tcp, tcp_len);
     net_send_raw(pkt,(uint16_t)(14+ip_len));
 
     if (flags&(TCP_SYN|TCP_FIN)) s->seq++;
@@ -364,13 +382,13 @@ int tcp_connect(uint32_t dst_ip, uint16_t dst_port) {
     tcp_sockets[s].state      = TCP_SYN_SENT;
 
     send_arp_request(dst_ip);
-    timer_sleep(20);
+    for (int i=0;i<20;i++) { net_poll(); timer_sleep(5); }
     tcp_send_raw(&tcp_sockets[s], TCP_SYN, 0, 0);
 
-    for (int tries=0; tries<100; tries++) {
+    for (int tries=0; tries<500; tries++) {
         net_poll();
         if (tcp_sockets[s].state==TCP_ESTABLISHED) return s;
-        timer_sleep(10);
+        timer_sleep(20);
     }
     tcp_sockets[s].used=0;
     return -1;
@@ -431,12 +449,21 @@ void tcp_process(uint8_t *frame, uint16_t len) {
             uint8_t doff = (uint8_t)((tcp->data_offset>>4)*4);
             uint16_t data_len = (uint16_t)(len - 14 - 20 - doff);
             if (data_len>0) {
-                uint8_t *data = frame+14+20+doff;
-                s->ack = seq + data_len;
-                for (uint16_t j=0;j<data_len;j++) {
-                    s->rbuf[s->rbuf_head] = data[j];
-                    s->rbuf_head=(s->rbuf_head+1)%TCP_BUF_SIZE;
+                uint32_t seg_end = seq + data_len;
+                if (seq <= s->ack && seg_end > s->ack) {
+                    uint8_t *data = frame+14+20+doff;
+                    uint32_t skip = s->ack - seq;
+                    uint32_t newlen = seg_end - s->ack;
+                    uint32_t space = TCP_BUF_SIZE - ((s->rbuf_head-s->rbuf_tail+TCP_BUF_SIZE)%TCP_BUF_SIZE) - 1;
+                    uint32_t take = (newlen > space) ? space : newlen;
+                    for (uint32_t j=0;j<take;j++) {
+                        s->rbuf[s->rbuf_head] = data[skip+j];
+                        s->rbuf_head=(s->rbuf_head+1)%TCP_BUF_SIZE;
+                    }
+                    s->ack += take;
                 }
+                /* fully-duplicate or out-of-order segment: drop the payload
+                   but still re-ACK our real position so the sender resyncs */
                 tcp_send_raw(s, TCP_ACK, 0, 0);
             }
             if (tcp->flags&TCP_FIN) {

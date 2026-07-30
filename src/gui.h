@@ -41,6 +41,13 @@
 #define C_ICON_BG      30
 #define C_CURSOR       31
 
+/* 32-63: 8-shade gradient ramps (light->dark), for chrome that used to be
+   flat single colors. Index with base+0..base+7. */
+#define C_GRAD_TITLE   32   /* window titlebar: light blue -> WIN_TITLE */
+#define C_GRAD_TASKBAR 40   /* taskbar bar: charcoal-blue, light -> dark */
+#define C_GRAD_SKY     48   /* desktop wallpaper: blue-grey -> deep navy */
+#define C_GRAD_ACCENT  56   /* highlights/selection: bright cyan -> teal */
+
 void gui_init(void);
 void gui_exit(void);
 
@@ -58,7 +65,13 @@ void gui_printf(int x, int y, uint8_t fg, uint8_t bg, const char *fmt, ...);
 
 void gui_window(int x, int y, int w, int h, const char *title);
 void gui_button(int x, int y, int w, int h, const char *label, int pressed);
-void gui_icon(int x, int y, const char *label, uint8_t icon_color);
+
+typedef enum {
+    ICON_TERM, ICON_FOLDER, ICON_MONITOR, ICON_CALC,
+    ICON_NOTE, ICON_EXIT, ICON_PKG
+} icon_kind_t;
+
+void gui_icon(int x, int y, const char *label, uint8_t icon_color, icon_kind_t kind);
 
 void gui_draw_cursor(int x, int y);
 

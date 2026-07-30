@@ -1,0 +1,1 @@
+fortune|FORTUNE.ELF|Random one-liner (network pkg demo)

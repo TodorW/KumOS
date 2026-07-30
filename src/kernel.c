@@ -32,6 +32,7 @@
 #include "ext2.h"
 #include "swap.h"
 #include "pkg.h"
+#include "pkgnet.h"
 
 #define MULTIBOOT_MAGIC  0x2BADB002
 #define MULTIBOOT_FLAG_MEM (1<<0)
@@ -284,6 +285,18 @@ static void cmd_vmem(void) {
     vga_putchar('\n');
 }
 
+static int pkg_str_contains(const char *hay, const char *needle) {
+    size_t hl = kstrlen(hay), nl = kstrlen(needle);
+    if (!nl) return 1;
+    if (nl > hl) return 0;
+    for (size_t i=0;i+nl<=hl;i++) {
+        size_t j=0;
+        while (j<nl && hay[i+j]==needle[j]) j++;
+        if (j==nl) return 1;
+    }
+    return 0;
+}
+
 static void cmd_pkg(const char *args) {
     char sub[32], rest2[CMD_LEN];
     split_cmd(args, sub, rest2, 32);
@@ -301,13 +314,65 @@ static void cmd_pkg(const char *args) {
             vga_puts(pkg_desc_at(i));
             vga_putchar('\n');
         }
+        if (pkgnet_count() > 0) {
+            vga_set_color(VGA_LIGHT_CYAN,VGA_BLACK);
+            vga_puts("\n  === Network repo ===\n\n");
+            vga_set_color(VGA_WHITE,VGA_BLACK);
+            for (int i=0;i<pkgnet_count();i++) {
+                vga_puts("  [ ] ");
+                vga_puts(pkgnet_name_at(i));
+                int pad = 10 - (int)kstrlen(pkgnet_name_at(i));
+                for (int p=0;p<pad;p++) vga_putchar(' ');
+                vga_puts(pkgnet_desc_at(i));
+                vga_putchar('\n');
+            }
+        }
         vga_putchar('\n');
+    } else if (kstrcmp(sub,"update")==0) {
+        vga_puts("pkg: fetching index from repo...\n");
+        int n = pkgnet_update();
+        if (n < 0) vga_puts("pkg: update failed (no network, or repo unreachable)\n");
+        else kprintf("pkg: %d package(s) available from repo\n", n);
+    } else if (kstrcmp(sub,"repo")==0) {
+        if (!*rest2) {
+            uint32_t ip = pkgnet_repo_ip();
+            kprintf("pkg: repo is %u.%u.%u.%u:%u\n",
+                    (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF, pkgnet_repo_port());
+        } else {
+            uint32_t ip; uint16_t port;
+            if (pkgnet_parse_addr(rest2, &ip, &port) == 0) {
+                pkgnet_set_repo(ip, port);
+                vga_puts("pkg: repo updated (run 'pkg update' to refresh)\n");
+            } else vga_puts("Usage: pkg repo <ip[:port]>\n");
+        }
+    } else if (kstrcmp(sub,"search")==0) {
+        if (!*rest2) { vga_puts("Usage: pkg search <term>\n"); return; }
+        int found = 0;
+        for (int i=0;i<pkg_count();i++) {
+            if (pkg_str_contains(pkg_name_at(i),rest2) || pkg_str_contains(pkg_desc_at(i),rest2)) {
+                kprintf("  %s - %s\n", pkg_name_at(i), pkg_desc_at(i));
+                found = 1;
+            }
+        }
+        for (int i=0;i<pkgnet_count();i++) {
+            if (pkg_str_contains(pkgnet_name_at(i),rest2) || pkg_str_contains(pkgnet_desc_at(i),rest2)) {
+                kprintf("  %s - %s (net)\n", pkgnet_name_at(i), pkgnet_desc_at(i));
+                found = 1;
+            }
+        }
+        if (!found) vga_puts("pkg: no matches\n");
     } else if (kstrcmp(sub,"install")==0) {
         if (!*rest2) { vga_puts("Usage: pkg install <name>\n"); return; }
         int r = pkg_install(rest2);
-        if (r==0) kprintf("Installed '%s' -> disk\n", rest2);
-        else if (r==-1) kprintf("pkg: unknown package '%s'\n", rest2);
+        if (r==0) { kprintf("Installed '%s' -> disk\n", rest2); return; }
+        if (r==-2) { vga_puts("pkg: no disk mounted (run dformat first)\n"); return; }
+        if (r!=-1) { vga_puts("pkg: install failed (disk full?)\n"); return; }
+
+        r = pkgnet_install(rest2);
+        if (r==0) kprintf("Installed '%s' -> disk (via network)\n", rest2);
+        else if (r==-1) kprintf("pkg: unknown package '%s' (try 'pkg update' first)\n", rest2);
         else if (r==-2) vga_puts("pkg: no disk mounted (run dformat first)\n");
+        else if (r==-3) vga_puts("pkg: download failed (no network, or repo unreachable)\n");
         else vga_puts("pkg: install failed (disk full?)\n");
     } else if (kstrcmp(sub,"remove")==0) {
         if (!*rest2) { vga_puts("Usage: pkg remove <name>\n"); return; }
@@ -326,13 +391,23 @@ static void cmd_pkg(const char *args) {
                 vga_puts(pkg_is_installed(i) ? "  Installed\n" : "  Not installed\n");
             }
         }
+        for (int i=0;i<pkgnet_count();i++) {
+            if (kstrcmp(pkgnet_name_at(i), rest2)==0) {
+                found=1;
+                kprintf("  %s -> %s (network repo)\n", pkgnet_name_at(i), pkgnet_fname_at(i));
+                kprintf("  %s\n", pkgnet_desc_at(i));
+            }
+        }
         if (!found) kprintf("pkg: unknown package '%s'\n", rest2);
     } else {
         vga_puts("  Usage:\n");
-        vga_puts("    pkg list             - show available packages\n");
-        vga_puts("    pkg install <name>   - write package to FAT12 disk\n");
+        vga_puts("    pkg list             - show available + network packages\n");
+        vga_puts("    pkg update           - fetch the network repo's index\n");
+        vga_puts("    pkg search <term>    - search name/description\n");
+        vga_puts("    pkg install <name>   - install (checks disk repo, then network)\n");
         vga_puts("    pkg remove <name>    - delete package from disk\n");
         vga_puts("    pkg info <name>      - show package details\n");
+        vga_puts("    pkg repo [ip[:port]] - show/set the network repo address\n");
     }
 }
 
@@ -691,7 +766,7 @@ static void cmd_help(void) {
     vga_puts("    meminfo  - RAM, frames, heap, demand-paging stats\n");
     vga_puts("    vmem     - Virtual memory map + live page table walk\n");
     vga_puts("    mmap     - Map/unmap/COW/query virtual pages\n");
-    vga_puts("    pkg      - list/install/remove/info bundled packages\n");
+    vga_puts("    pkg      - list/update/search/install/remove packages (net-aware)\n");
     vga_puts("    cpuinfo  - CPU via CPUID\n");
     vga_puts("    irqinfo  - GDT/IDT/PIC/PIT/Sched live status\n");
     vga_puts("    ifconfig          - NIC info + IP address\n");
@@ -1288,11 +1363,11 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
         uint8_t pic_mask = inb(0x21);
         uint8_t kb_stat  = inb(0x64);
         vga_set_color(VGA_DARK_GREY, VGA_BLACK);
-        vga_puts("  [kbd] PIC1 mask=0x");
+        vga_puts("  [kbd] PIC1 mask=");
         vga_put_hex(pic_mask);
         vga_puts("  IRQ1=");
         vga_puts((pic_mask & 0x02) ? "MASKED(bad)" : "unmasked(ok)");
-        vga_puts("  8042 status=0x");
+        vga_puts("\n  8042 status=");
         vga_put_hex(kb_stat);
         vga_puts("  mode=hybrid(IRQ+poll)\n\n");
     }
