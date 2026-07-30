@@ -447,7 +447,15 @@ void tcp_process(uint8_t *frame, uint16_t len) {
         }
         if (s->state==TCP_ESTABLISHED) {
             uint8_t doff = (uint8_t)((tcp->data_offset>>4)*4);
-            uint16_t data_len = (uint16_t)(len - 14 - 20 - doff);
+            /* derive the real TCP payload length from the IP header's own
+               total_len field, not from the ethernet frame length - small
+               segments get padded to ethernet's 60-byte minimum frame size,
+               and computing length from the (possibly padded) frame instead
+               of the protocol's own length field turns that trailing zero
+               padding into phantom "payload" bytes */
+            uint16_t ip_total = NET_HTONS(ip->total_len);
+            uint16_t hdrs = (uint16_t)(20 + doff);
+            uint16_t data_len = (ip_total > hdrs) ? (uint16_t)(ip_total - hdrs) : 0;
             if (data_len>0) {
                 uint32_t seg_end = seq + data_len;
                 if (seq <= s->ack && seg_end > s->ack) {

@@ -27,6 +27,7 @@
 #include "procfs.h"
 #include "users.h"
 #include "dns.h"
+#include "tls.h"
 #include "dmesg.h"
 #include "dhcp.h"
 #include "ext2.h"
@@ -283,6 +284,55 @@ static void cmd_vmem(void) {
     kprintf("    Heap brk:            0x%x  (%u KB used)\n",
             heap_brk(), heap_capacity()/1024);
     vga_putchar('\n');
+}
+
+static void cmd_https(const char *args) {
+    char host[64], path[192];
+    split_cmd(args, host, path, 64);
+    if (!*host) { vga_puts("Usage: https <host> [path]\n"); return; }
+    if (!*path) kstrcpy(path, "/");
+
+    uint32_t ip; uint16_t port = 443;
+    if (kstrcmp(host, "local") == 0) {
+        ip = NET_IP(10,0,2,2); port = 8443;
+        vga_puts("(debug) using local test server 10.0.2.2:8443\n");
+    } else {
+        vga_puts("Resolving "); vga_puts(host); vga_puts("...\n");
+        ip = dns_resolve(host);
+        if (!ip) { vga_puts("https: DNS resolution failed\n"); return; }
+        kprintf("  -> %u.%u.%u.%u\n", (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF);
+    }
+
+    vga_puts("TLS handshake (TLS_RSA_WITH_AES_128_CBC_SHA)...\n");
+    /* tls_conn_t is ~16KB (dominated by its receive buffer) - way too big
+       for a kernel stack frame (SCHED_STACK_SIZE is 4KB), so it's heap
+       allocated rather than a local. */
+    tls_conn_t *tls = (tls_conn_t*)kmalloc(sizeof(tls_conn_t));
+    if (!tls) { vga_puts("https: out of memory\n"); return; }
+    if (tls_connect(tls, ip, port, host) != 0) {
+        vga_puts("https: TLS handshake failed (no cert-chain validation is done here -\n");
+        vga_puts("       real encryption, not real authentication - see README)\n");
+        kfree(tls);
+        return;
+    }
+    vga_puts("Connected.\n\n");
+
+    char req[256];
+    kstrcpy(req, "GET "); kstrcat(req, path);
+    kstrcat(req, " HTTP/1.0\r\nHost: "); kstrcat(req, host);
+    kstrcat(req, "\r\nConnection: close\r\n\r\n");
+    tls_send(tls, req, (uint32_t)kstrlen(req));
+
+    char buf[2048];
+    for (;;) {
+        int n = tls_recv(tls, buf, sizeof(buf)-1);
+        if (n <= 0) break;
+        buf[n] = 0;
+        vga_puts(buf);
+    }
+    vga_putchar('\n');
+    tls_close(tls);
+    kfree(tls);
 }
 
 static int pkg_str_contains(const char *hay, const char *needle) {
@@ -767,6 +817,7 @@ static void cmd_help(void) {
     vga_puts("    vmem     - Virtual memory map + live page table walk\n");
     vga_puts("    mmap     - Map/unmap/COW/query virtual pages\n");
     vga_puts("    pkg      - list/update/search/install/remove packages (net-aware)\n");
+    vga_puts("    https    - fetch a page over real TLS 1.2 (no cert validation)\n");
     vga_puts("    cpuinfo  - CPU via CPUID\n");
     vga_puts("    irqinfo  - GDT/IDT/PIC/PIT/Sched live status\n");
     vga_puts("    ifconfig          - NIC info + IP address\n");
@@ -940,6 +991,7 @@ static void dispatch(const char *line) {
     }
     else if(kstrcmp(cmd,"mmap")==0){ cmd_mmap(rest); }
     else if(kstrcmp(cmd,"pkg")==0){ cmd_pkg(rest); }
+    else if(kstrcmp(cmd,"https")==0){ cmd_https(rest); }
     else if(kstrcmp(cmd,"cpuinfo")==0){ cmd_cpuinfo(); }
     else if(kstrcmp(cmd,"irqinfo")==0){ cmd_irqinfo(); }
     else if(kstrcmp(cmd,"ifconfig")==0) {
