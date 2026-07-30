@@ -1242,7 +1242,7 @@ static void dispatch(const char *line) {
         } else {
             int i = pkg_find_index(rest);
             if (i < 0) {
-                kprintf("run: unknown program '%s' — type 'run' to list\n", rest);
+                kprintf("run: unknown program '%s' - type 'run' to list\n", rest);
             } else {
                 const uint8_t *start, *end;
                 pkg_blob_at(i, &start, &end);
@@ -1339,7 +1339,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
     serial_init(COM1);
     serial_puts(COM1, "\r\n\r\n");
     serial_puts(COM1, "========================================\r\n");
-    serial_puts(COM1, "  KumOS v1.4 — Serial Boot Log (COM1)  \r\n");
+    serial_puts(COM1, "  KumOS v1.4 - Serial Boot Log (COM1)  \r\n");
     serial_puts(COM1, "========================================\r\n");
 
     if (magic == MULTIBOOT_MAGIC && mbi && (mbi->flags & MULTIBOOT_FLAG_MEM))

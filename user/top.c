@@ -16,7 +16,7 @@ int main(void) {
     char buf[1024];
     int passes = 0;
 
-    puts("\n  top — KumOS process monitor  (5 passes, 1s interval)\n");
+    puts("\n  top - KumOS process monitor  (5 passes, 1s interval)\n");
 
     while (passes++ < 5) {
         puts("  ----------------------------------------");

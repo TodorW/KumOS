@@ -50,7 +50,7 @@ static void ed_list(int from, int to) {
 }
 
 static void ed_help(void) {
-    puts("\n  ed — KumOS line editor");
+    puts("\n  ed - KumOS line editor");
     puts("  Commands:");
     puts("    l [from] [to]  - list lines");
     puts("    a <text>       - append line");
