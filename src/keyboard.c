@@ -67,7 +67,7 @@ static const char sc_hi[128] = {
     '*',0,' ',
 };
 
-static volatile int shift=0, caps=0, ctrl=0, ext=0;
+static volatile int shift=0, caps=0, ctrl=0, ext=0, alt=0;
 
 static void process_scancode(uint8_t sc) {
     if (sc == 0xE0 || sc == 0xE1) { ext = 1; return; }
@@ -77,6 +77,7 @@ static void process_scancode(uint8_t sc) {
         if (!ext) {
             if (sc==0x2A||sc==0x36) shift=0;
             if (sc==0x1D) ctrl=0;
+            if (sc==0x38) alt=0;
         }
         ext = 0; return;
     }
@@ -103,7 +104,7 @@ static void process_scancode(uint8_t sc) {
     if (sc==0x2A||sc==0x36) { shift=1; return; }
     if (sc==0x3A)            { caps=!caps; return; }
     if (sc==0x1D)            { ctrl=1; return; }
-    if (sc==0x38)            return;
+    if (sc==0x38)            { alt=1; return; }
     if (sc>=128)             return;
 
     char c = (shift && sc < (int)sizeof(sc_hi)) ? sc_hi[sc] : sc_lo[sc];
@@ -134,6 +135,7 @@ static char poll_once(void) {
         if (!ext) {
             if (sc==0x2A||sc==0x36) shift=0;
             if (sc==0x1D) ctrl=0;
+            if (sc==0x38) alt=0;
         }
         ext = 0;
         return 0;
@@ -339,7 +341,7 @@ int keyboard_getline(char *out, int maxlen) {
 }
 
 int keyboard_ctrl_held(void) { return ctrl; }
-int keyboard_alt_held(void)  { return 0;   }
+int keyboard_alt_held(void)  { return alt; }
 int keyboard_has_input(void) { return bhead != btail; }
 
 int keyboard_check_ctrlc(void) {
