@@ -637,6 +637,22 @@ static void snake_game(void) {
     keyboard_getchar_blocking();
 }
 
+static void cmd_free(void) {
+    uint32_t phys_used_kb = pmm_used() * (PAGE_SIZE/1024);
+    uint32_t phys_free_kb = (pmm_total()-pmm_used()) * (PAGE_SIZE/1024);
+    uint32_t heap_used_kb = (kmalloc_used()+heap_used()) / 1024;
+
+    vga_set_color(VGA_YELLOW,VGA_BLACK);
+    vga_puts("\n  === Memory ===\n\n");
+    vga_set_color(VGA_WHITE,VGA_BLACK);
+    vga_puts("                total       used       free\n");
+    kprintf("  Mem:      %8uK  %8uK  %8uK\n", total_mem_kb, phys_used_kb, phys_free_kb);
+    kprintf("  Heap:     %8uK  %8uK  %8uK\n",
+            (kmalloc_used()+kmalloc_free()+heap_used()+heap_capacity())/1024,
+            heap_used_kb, (kmalloc_free()+heap_capacity()-heap_used())/1024);
+    vga_putchar('\n');
+}
+
 static void df_row(const char *name, const char *mnt, uint32_t total_kb, uint32_t free_kb) {
     uint32_t used_kb = total_kb > free_kb ? total_kb - free_kb : 0;
     uint32_t pct = total_kb ? (used_kb * 100) / total_kb : 0;
@@ -866,6 +882,7 @@ static void cmd_help(void) {
     vga_puts("    ps       - Task list (real scheduler)\n");
     vga_puts("    meminfo  - RAM, frames, heap, demand-paging stats\n");
     vga_puts("    df       - Disk usage summary (fat12 + ext2)\n");
+    vga_puts("    free     - Memory summary (Linux-style)\n");
     vga_puts("    vmem     - Virtual memory map + live page table walk\n");
     vga_puts("    mmap     - Map/unmap/COW/query virtual pages\n");
     vga_puts("    pkg      - list/update/search/install/remove packages (net-aware)\n");
@@ -1289,6 +1306,7 @@ static void dispatch(const char *line) {
         }
     }
     else if(kstrcmp(cmd,"df")==0)    { cmd_df(); }
+    else if(kstrcmp(cmd,"free")==0)  { cmd_free(); }
     else if(kstrcmp(cmd,"disk")==0)  { cmd_disk(); }
     else if(kstrcmp(cmd,"dls")==0)   { cmd_dls(); }
     else if(kstrcmp(cmd,"dcat")==0)  { cmd_dcat(rest); }
