@@ -177,6 +177,70 @@ static void send_arp_request(uint32_t target_ip) {
     net_send_raw(frame,42);
 }
 
+typedef struct {
+    uint8_t  type;
+    uint8_t  code;
+    uint16_t checksum;
+    uint16_t id;
+    uint16_t seq;
+} __attribute__((packed)) icmp_hdr_t;
+
+#define ICMP_ECHO_REQUEST  8
+#define ICMP_ECHO_REPLY    0
+
+static int      icmp_got = 0;
+static uint32_t icmp_from_ip = 0;
+static uint16_t icmp_reply_id = 0, icmp_reply_seq = 0;
+static uint8_t  icmp_reply_ttl = 0;
+
+int net_send_icmp_echo(uint32_t dst_ip, uint16_t id, uint16_t seq,
+                       const void *payload, uint16_t plen) {
+    if (!rtl_ready_flag) return -1;
+    uint8_t dst_mac[ETH_ALEN];
+    uint32_t nexthop = ((dst_ip & NET_HTONL(net_mask)) == (my_ip & NET_HTONL(net_mask)))
+                       ? dst_ip : gw_ip;
+    if (!arp_lookup(nexthop, dst_mac)) {
+        send_arp_request(nexthop);
+        timer_sleep(50);
+        if (!arp_lookup(nexthop, dst_mac)) kmemset(dst_mac,0xFF,ETH_ALEN);
+    }
+    if (plen > 1400) plen = 1400;
+    uint16_t icmp_len = 8 + plen;
+    uint16_t ip_len   = 20 + icmp_len;
+    uint8_t  pkt[1500];
+    eth_hdr_t *eth=(eth_hdr_t*)pkt;
+    kmemcpy(eth->dst,dst_mac,ETH_ALEN);
+    kmemcpy(eth->src,my_mac,ETH_ALEN);
+    eth->type=NET_HTONS(ETH_P_IP);
+    ip_hdr_t *ip=(ip_hdr_t*)(pkt+14);
+    ip->version_ihl=0x45; ip->tos=0;
+    ip->total_len=NET_HTONS(ip_len);
+    ip->id=NET_HTONS(1); ip->flags_frag=0;
+    ip->ttl=64; ip->protocol=IPPROTO_ICMP;
+    ip->checksum=0;
+    ip->src_ip=NET_HTONL(my_ip);
+    ip->dst_ip=NET_HTONL(dst_ip);
+    ip->checksum=ip_checksum(ip,20);
+    icmp_hdr_t *icmp=(icmp_hdr_t*)(pkt+14+20);
+    icmp->type=ICMP_ECHO_REQUEST; icmp->code=0;
+    icmp->id=NET_HTONS(id); icmp->seq=NET_HTONS(seq);
+    icmp->checksum=0;
+    if (plen) kmemcpy(pkt+14+20+8,payload,plen);
+    icmp->checksum=ip_checksum(icmp,icmp_len);
+    return net_send_raw(pkt,(uint16_t)(14+ip_len));
+}
+
+int net_icmp_poll_reply(uint32_t *from_ip, uint16_t *id, uint16_t *seq, uint8_t *ttl) {
+    net_poll();
+    if (!icmp_got) return 0;
+    icmp_got = 0;
+    if (from_ip) *from_ip = icmp_from_ip;
+    if (id)      *id      = icmp_reply_id;
+    if (seq)     *seq     = icmp_reply_seq;
+    if (ttl)     *ttl     = icmp_reply_ttl;
+    return 1;
+}
+
 int net_send_udp(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
                  const void *data, uint16_t data_len) {
     if (!rtl_ready_flag) return -1;
@@ -243,6 +307,15 @@ void net_poll(void) {
                 }
             } else if (ip->protocol==IPPROTO_TCP && frame_len>=14+20+20) {
                 tcp_process(payload, frame_len);
+            } else if (ip->protocol==IPPROTO_ICMP && frame_len>=14+20+8) {
+                icmp_hdr_t *icmp=(icmp_hdr_t*)(payload+14+20);
+                if (icmp->type==ICMP_ECHO_REPLY) {
+                    icmp_got = 1;
+                    icmp_from_ip   = NET_HTONL(ip->src_ip);
+                    icmp_reply_id  = NET_HTONS(icmp->id);
+                    icmp_reply_seq = NET_HTONS(icmp->seq);
+                    icmp_reply_ttl = ip->ttl;
+                }
             }
         }
         uint16_t rx_ptr = (uint16_t)((off + pkt_len + 4 + 3) & ~3);

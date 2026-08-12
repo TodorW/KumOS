@@ -59,6 +59,10 @@ int  net_send_udp(uint32_t dst_ip, uint16_t src_port,
 int  net_recv_udp(uint16_t port, void *buf, uint16_t bufsz,
                   uint32_t *src_ip, uint16_t *src_port);
 
+int  net_send_icmp_echo(uint32_t dst_ip, uint16_t id, uint16_t seq,
+                        const void *payload, uint16_t plen);
+int  net_icmp_poll_reply(uint32_t *from_ip, uint16_t *id, uint16_t *seq, uint8_t *ttl);
+
 int  net_send_raw(const void *frame, uint16_t len);
 void net_poll(void);
 void net_print_info(void);
