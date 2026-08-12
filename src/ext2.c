@@ -548,6 +548,13 @@ int ext2_stat(const char *path, uint32_t *size_out) {
     return 0;
 }
 
+int ext2_space(uint32_t *total_kb, uint32_t *free_kb) {
+    if (!mounted) return -1;
+    if (total_kb) *total_kb = sb.s_blocks_count * block_size / 1024;
+    if (free_kb)  *free_kb  = sb.s_free_blocks_count * block_size / 1024;
+    return 0;
+}
+
 void ext2_info(void) {
     if (!mounted) { vga_puts("  No EXT2 volume mounted.\n"); return; }
     vga_set_color(VGA_YELLOW, VGA_BLACK);

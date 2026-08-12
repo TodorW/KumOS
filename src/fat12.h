@@ -30,5 +30,6 @@ int  fat12_delete(const char *name);
 int  fat12_format(int ata_drive, const char *label);
 
 void fat12_info(void);
+int  fat12_space(uint32_t *total_kb, uint32_t *free_kb);
 
 #endif

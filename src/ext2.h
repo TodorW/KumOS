@@ -82,6 +82,7 @@ int  ext2_delete_file(const char *path);
 int  ext2_list_dir(const char *path, char *buf, uint32_t sz);
 int  ext2_stat(const char *path, uint32_t *size_out);
 void ext2_info(void);
+int  ext2_space(uint32_t *total_kb, uint32_t *free_kb);
 
 extern vfs_ops_t ext2_vfs_ops;
 #endif

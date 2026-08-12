@@ -385,6 +385,16 @@ int fat12_format(int drive, const char *label) {
     return fat12_mount(drive);
 }
 
+int fat12_space(uint32_t *total_kb, uint32_t *free_kb) {
+    if (!g_mounted) return -1;
+    uint16_t free_cl = 0;
+    for (uint16_t i = 2; i < g_total_clusters + 2; i++)
+        if (fat_get(i) == 0x000) free_cl++;
+    if (total_kb) *total_kb = g_total_clusters * 512 / 1024;
+    if (free_kb)  *free_kb  = free_cl * 512 / 1024;
+    return 0;
+}
+
 void fat12_info(void) {
     if (!g_mounted) { vga_puts("  No FAT12 volume mounted.\n"); return; }
     vga_set_color(VGA_YELLOW, VGA_BLACK);
