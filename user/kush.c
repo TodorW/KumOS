@@ -159,6 +159,48 @@ static int do_uniq(char *argv[], int argc) {
     return 0;
 }
 
+static int do_head(char *argv[], int argc) {
+    int n = 10, fi = 1;
+    if (argc>1 && argv[1][0]=='-') { n = atoi(argv[1]+1); fi = 2; }
+    int fd = 0;
+    if (argc>fi) { fd = open(argv[fi]); if (fd<0) { printf("head: %s: not found\n", argv[fi]); return 1; } }
+    static char buf[8192]; int total=0; int r;
+    while (total<(int)sizeof(buf)-1 && (r=fread(fd,buf+total,(uint32_t)(sizeof(buf)-total-1)))>0) total+=r;
+    buf[total]=0;
+    if (fd) close(fd);
+    char *p=buf; int lines=0;
+    while (*p && lines<n) {
+        char *nl=strchr(p,'\n');
+        if (nl) *nl=0;
+        fputs(p); putchar('\n');
+        p = nl ? nl+1 : p+strlen(p);
+        lines++;
+    }
+    return 0;
+}
+
+static int do_tail(char *argv[], int argc) {
+    int n = 10, fi = 1;
+    if (argc>1 && argv[1][0]=='-') { n = atoi(argv[1]+1); fi = 2; }
+    int fd = 0;
+    if (argc>fi) { fd = open(argv[fi]); if (fd<0) { printf("tail: %s: not found\n", argv[fi]); return 1; } }
+    static char buf[8192]; int total=0; int r;
+    while (total<(int)sizeof(buf)-1 && (r=fread(fd,buf+total,(uint32_t)(sizeof(buf)-total-1)))>0) total+=r;
+    buf[total]=0;
+    if (fd) close(fd);
+    char *lines[512]; int nlines=0;
+    char *p=buf;
+    while (*p && nlines<512) {
+        char *nl=strchr(p,'\n');
+        if (nl) *nl=0;
+        lines[nlines++]=p;
+        p = nl ? nl+1 : p+strlen(p);
+    }
+    int start = nlines>n ? nlines-n : 0;
+    for (int i=start;i<nlines;i++) { fputs(lines[i]); putchar('\n'); }
+    return 0;
+}
+
 static int do_cp(char *argv[], int argc) {
     if (argc < 3) { fputs("cp: cp <src> <dst>\n"); return 1; }
     int src = open(argv[1]);
@@ -276,6 +318,8 @@ static int do_help(char *argv[], int argc) {
     fputs("    help              - This help\n");
     fputs("    ls [path]         - List files\n");
     fputs("    cat <file>        - Print file\n");
+    fputs("    head [-n N] [f]   - First N lines (default 10)\n");
+    fputs("    tail [-n N] [f]   - Last N lines (default 10)\n");
     fputs("    cp <src> <dst>    - Copy file\n");
     fputs("    mv <src> <dst>    - Move/rename file\n");
     fputs("    set               - List shell variables\n");
@@ -343,6 +387,8 @@ static int dispatch_one(char *argv[], int argc) {
     if (!strcmp(cmd,"wc"))      return do_wc(argv,argc);
     if (!strcmp(cmd,"sort"))    return do_sort(argv,argc);
     if (!strcmp(cmd,"uniq"))    return do_uniq(argv,argc);
+    if (!strcmp(cmd,"head"))    return do_head(argv,argc);
+    if (!strcmp(cmd,"tail"))    return do_tail(argv,argc);
     if (!strcmp(cmd,"cp"))      return do_cp(argv,argc);
     if (!strcmp(cmd,"mv"))      return do_mv(argv,argc);
     if (!strcmp(cmd,"rm"))      return do_rm(argv,argc);
