@@ -503,6 +503,22 @@ static int wm_topmost(void) {
     return -1;
 }
 
+/* Alt+Tab: walk the z-order ring backwards from the current top, focusing
+   the first other active/non-minimized window found. A no-op if there's
+   nothing else to switch to. */
+static void wm_cycle_focus(void) {
+    if (zcount < 2) return;
+    int top = wm_topmost();
+    if (top < 0) return;
+    int topidx = -1;
+    for (int i=0;i<zcount;i++) if (zorder[i]==top) { topidx=i; break; }
+    for (int step=1; step<zcount; step++) {
+        int idx = (topidx - step + zcount) % zcount;
+        int cand = zorder[idx];
+        if (wins[cand].active && !wins[cand].minimized) { wm_push_front(cand); return; }
+    }
+}
+
 static void files_refresh(void);
 static void pkg_refresh(void);
 
@@ -1494,6 +1510,8 @@ void gui_run(void) {
                 else if (launcher_open) launcher_open = 0;
                 else if (top >= 0) wm_close(top);
                 else running = 0;
+            } else if (key == '\t' && keyboard_alt_held()) {
+                wm_cycle_focus();
             } else if (top == WIN_TERMINAL) {
                 if (key == '\n') {
                     char echo[TERM_COLS+3];
