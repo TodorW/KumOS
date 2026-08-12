@@ -1595,6 +1595,7 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
     __asm__ volatile ("sti");
 
     draw_splash();
+    speaker_jingle();
     vga_clear();
     draw_statusbar();
     vga_goto(2, 0);
