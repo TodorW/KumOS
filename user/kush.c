@@ -344,6 +344,8 @@ static int do_help(char *argv[], int argc) {
     fputs("    mv <src> <dst>    - Move/rename file\n");
     fputs("    set               - List shell variables\n");
     fputs("    NAME=value        - Set a shell variable ($NAME to use it)\n");
+    fputs("    alias             - List aliases\n");
+    fputs("    alias name=value  - Define an alias\n");
     fputs("    rm <file>         - Delete file\n");
     fputs("    write <f> <data>  - Write text to file\n");
     fputs("    cd [path]         - Change directory\n");
@@ -508,12 +510,80 @@ static void expand_vars(const char *in, char *out, int outmax) {
     out[oi] = 0;
 }
 
+#define KUSH_MAX_ALIAS 16
+#define KUSH_ALIAS_NAME 16
+#define KUSH_ALIAS_VAL  128
+static char alias_names[KUSH_MAX_ALIAS][KUSH_ALIAS_NAME];
+static char alias_vals[KUSH_MAX_ALIAS][KUSH_ALIAS_VAL];
+static int  nalias = 0;
+
+static const char *alias_get(const char *name) {
+    for (int i=0;i<nalias;i++) if (!strcmp(alias_names[i],name)) return alias_vals[i];
+    return 0;
+}
+
+static void alias_set(const char *name, const char *val) {
+    for (int i=0;i<nalias;i++) {
+        if (!strcmp(alias_names[i],name)) {
+            strncpy(alias_vals[i],val,KUSH_ALIAS_VAL-1); alias_vals[i][KUSH_ALIAS_VAL-1]=0;
+            return;
+        }
+    }
+    if (nalias < KUSH_MAX_ALIAS) {
+        strncpy(alias_names[nalias],name,KUSH_ALIAS_NAME-1); alias_names[nalias][KUSH_ALIAS_NAME-1]=0;
+        strncpy(alias_vals[nalias],val,KUSH_ALIAS_VAL-1); alias_vals[nalias][KUSH_ALIAS_VAL-1]=0;
+        nalias++;
+    }
+}
+
+static void do_alias_list(void) {
+    for (int i=0;i<nalias;i++) printf("alias %s='%s'\n", alias_names[i], alias_vals[i]);
+}
+
+/* "alias" with no args lists them, "alias name=value" defines one - handled
+   as a whole-line special case (like try_assign) rather than a normal
+   dispatch_one builtin, since it needs the raw unsplit line to capture a
+   multi-word value after the '='. */
+static int try_alias_cmd(const char *line) {
+    if (strncmp(line,"alias",5) != 0) return 0;
+    if (line[5] != 0 && line[5] != ' ') return 0;
+    const char *rest = line+5;
+    while (*rest==' ') rest++;
+    if (!*rest) { do_alias_list(); return 1; }
+    const char *eq = strchr(rest,'=');
+    if (!eq) { fputs("alias: usage: alias name=value\n"); return 1; }
+    char name[KUSH_ALIAS_NAME]; int nlen=(int)(eq-rest);
+    if (nlen >= KUSH_ALIAS_NAME) nlen = KUSH_ALIAS_NAME-1;
+    strncpy(name, rest, (size_t)nlen); name[nlen]=0;
+    alias_set(name, eq+1);
+    return 1;
+}
+
+/* Expands a leading alias reference by splicing its value in place of the
+   first word - single pass, non-recursive (an alias whose value is itself
+   an alias name won't chain, a deliberate simplification). */
+static void expand_alias(char *line, int max) {
+    char first[KUSH_ALIAS_NAME]; int fi=0;
+    char *q = line;
+    while (*q==' ') q++;
+    while (*q && *q!=' ' && fi<KUSH_ALIAS_NAME-1) first[fi++]=*q++;
+    first[fi]=0;
+    const char *aval = alias_get(first);
+    if (!aval) return;
+    char combined[CMD_MAX];
+    strncpy(combined, aval, CMD_MAX-1); combined[CMD_MAX-1]=0;
+    strncat(combined, q, CMD_MAX-1-strlen(combined));
+    strncpy(line, combined, (size_t)max-1); line[max-1]=0;
+}
+
 static int run_pipeline(char *line) {
 
     if (try_assign(line)) return 0;
+    if (try_alias_cmd(line)) return 0;
 
     char expanded[CMD_MAX];
     expand_vars(line, expanded, CMD_MAX);
+    expand_alias(expanded, CMD_MAX);
     line = expanded;
 
     char *parts[8]; int nparts = 0;
