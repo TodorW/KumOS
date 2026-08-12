@@ -637,6 +637,45 @@ static void snake_game(void) {
     keyboard_getchar_blocking();
 }
 
+static int cal_day_of_week(int y, int m, int d) {
+    static const int t[] = {0,3,2,5,0,3,5,1,4,6,2,4};
+    if (m < 3) y -= 1;
+    return (y + y/4 - y/100 + y/400 + t[m-1] + d) % 7;
+}
+
+static int cal_is_leap(int y) { return (y%4==0 && y%100!=0) || y%400==0; }
+
+static void cmd_cal(void) {
+    static const char *mnames[] = {"January","February","March","April","May","June",
+                                    "July","August","September","October","November","December"};
+    static const int mdays[]    = {31,28,31,30,31,30,31,31,30,31,30,31};
+
+    rtc_time_t now = rtc_read();
+    int y = now.year, m = now.month, today = now.day;
+    int days = mdays[m-1] + ((m==2 && cal_is_leap(y)) ? 1 : 0);
+    int start_wd = cal_day_of_week(y, m, 1);
+
+    vga_set_color(VGA_YELLOW,VGA_BLACK);
+    char hdr[32]; kstrcpy(hdr, "  "); kstrcat(hdr, mnames[m-1]); kstrcat(hdr, " ");
+    char yb[8]; kitoa((uint32_t)y, yb, 10); kstrcat(hdr, yb);
+    vga_putchar('\n'); vga_puts(hdr); vga_putchar('\n');
+    vga_set_color(VGA_WHITE,VGA_BLACK);
+    vga_puts("  Su Mo Tu We Th Fr Sa\n  ");
+
+    for (int i=0;i<start_wd;i++) vga_puts("   ");
+    int col = start_wd;
+    for (int d=1; d<=days; d++) {
+        if (d == today) vga_set_color(VGA_BLACK,VGA_LIGHT_CYAN);
+        if (d < 10) vga_putchar(' ');
+        vga_put_dec((uint32_t)d);
+        if (d == today) vga_set_color(VGA_WHITE,VGA_BLACK);
+        vga_putchar(' ');
+        col++;
+        if (col == 7) { col = 0; vga_puts("\n  "); }
+    }
+    vga_puts("\n\n");
+}
+
 static void cmd_free(void) {
     uint32_t phys_used_kb = pmm_used() * (PAGE_SIZE/1024);
     uint32_t phys_free_kb = (pmm_total()-pmm_used()) * (PAGE_SIZE/1024);
@@ -872,6 +911,7 @@ static void cmd_help(void) {
     vga_set_color(VGA_WHITE,VGA_BLACK);
     vga_puts("    help, clear, echo, uname, whoami, hostname, uptime, history\n");
     vga_puts("    date              - Current date/time (RTC)\n");
+    vga_puts("    cal               - This month's calendar\n");
     vga_puts("    mouse             - PS/2 mouse state\n");
     vga_puts("    beep [hz] [ms]    - PC speaker beep (default 1000hz 200ms)\n");
     vga_set_color(VGA_YELLOW,VGA_BLACK); vga_puts("  Files:\n");
@@ -1307,6 +1347,7 @@ static void dispatch(const char *line) {
     }
     else if(kstrcmp(cmd,"df")==0)    { cmd_df(); }
     else if(kstrcmp(cmd,"free")==0)  { cmd_free(); }
+    else if(kstrcmp(cmd,"cal")==0)   { cmd_cal(); }
     else if(kstrcmp(cmd,"disk")==0)  { cmd_disk(); }
     else if(kstrcmp(cmd,"dls")==0)   { cmd_dls(); }
     else if(kstrcmp(cmd,"dcat")==0)  { cmd_dcat(rest); }
