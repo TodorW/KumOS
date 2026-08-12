@@ -637,6 +637,34 @@ static void snake_game(void) {
     keyboard_getchar_blocking();
 }
 
+static void df_row(const char *name, const char *mnt, uint32_t total_kb, uint32_t free_kb) {
+    uint32_t used_kb = total_kb > free_kb ? total_kb - free_kb : 0;
+    uint32_t pct = total_kb ? (used_kb * 100) / total_kb : 0;
+    vga_puts("  "); vga_puts(name);
+    int pad = 8 - (int)kstrlen(name);
+    for (int p=0;p<pad;p++) vga_putchar(' ');
+    kprintf("%8uK  %8uK  %8uK  %3u%%  ", total_kb, used_kb, free_kb, pct);
+    vga_puts(mnt); vga_putchar('\n');
+}
+
+static void cmd_df(void) {
+    vga_set_color(VGA_YELLOW,VGA_BLACK);
+    vga_puts("\n  === Disk Usage ===\n\n");
+    vga_set_color(VGA_WHITE,VGA_BLACK);
+    vga_puts("  Filesystem     Total       Used       Free  Use%  Mounted\n");
+    vga_puts("  ----------  --------   --------   --------  ----  -------\n");
+    uint32_t total_kb, free_kb;
+    if (fat12_mounted() && fat12_space(&total_kb,&free_kb)==0)
+        df_row("fat12", "/disk", total_kb, free_kb);
+    else
+        vga_puts("  fat12       (not mounted)\n");
+    if (ext2_mounted() && ext2_space(&total_kb,&free_kb)==0)
+        df_row("ext2", "/ext2", total_kb, free_kb);
+    else
+        vga_puts("  ext2        (not mounted)\n");
+    vga_putchar('\n');
+}
+
 static void cmd_disk(void) {
     ata_print_info();
     fat12_info();
@@ -837,6 +865,7 @@ static void cmd_help(void) {
     vga_set_color(VGA_WHITE,VGA_BLACK);
     vga_puts("    ps       - Task list (real scheduler)\n");
     vga_puts("    meminfo  - RAM, frames, heap, demand-paging stats\n");
+    vga_puts("    df       - Disk usage summary (fat12 + ext2)\n");
     vga_puts("    vmem     - Virtual memory map + live page table walk\n");
     vga_puts("    mmap     - Map/unmap/COW/query virtual pages\n");
     vga_puts("    pkg      - list/update/search/install/remove packages (net-aware)\n");
@@ -1259,6 +1288,7 @@ static void dispatch(const char *line) {
             }
         }
     }
+    else if(kstrcmp(cmd,"df")==0)    { cmd_df(); }
     else if(kstrcmp(cmd,"disk")==0)  { cmd_disk(); }
     else if(kstrcmp(cmd,"dls")==0)   { cmd_dls(); }
     else if(kstrcmp(cmd,"dcat")==0)  { cmd_dcat(rest); }
