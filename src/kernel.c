@@ -77,6 +77,16 @@ static void kprintf(const char *fmt, ...) {
     __builtin_va_end(ap);
 }
 
+/* kprintf above has no width-specifier support (%8u is parsed as an
+   unrecognized "%8" - nothing consumed - followed by a literal 'u'), so
+   any right-justified numeric column needs this instead. */
+static void put_dec_pad(uint32_t v, int width) {
+    char buf[12]; kitoa(v, buf, 10);
+    int len = (int)kstrlen(buf);
+    for (int i=len;i<width;i++) vga_putchar(' ');
+    vga_puts(buf);
+}
+
 static void zpad2(uint32_t v, char *out) {
     out[0] = '0' + ((v/10)%10);
     out[1] = '0' + (v%10);
@@ -685,10 +695,12 @@ static void cmd_free(void) {
     vga_puts("\n  === Memory ===\n\n");
     vga_set_color(VGA_WHITE,VGA_BLACK);
     vga_puts("                total       used       free\n");
-    kprintf("  Mem:      %8uK  %8uK  %8uK\n", total_mem_kb, phys_used_kb, phys_free_kb);
-    kprintf("  Heap:     %8uK  %8uK  %8uK\n",
-            (kmalloc_used()+kmalloc_free()+heap_used()+heap_capacity())/1024,
-            heap_used_kb, (kmalloc_free()+heap_capacity()-heap_used())/1024);
+    vga_puts("  Mem:      "); put_dec_pad(total_mem_kb,8); vga_puts("K  ");
+                              put_dec_pad(phys_used_kb,8); vga_puts("K  ");
+                              put_dec_pad(phys_free_kb,8); vga_puts("K\n");
+    vga_puts("  Heap:     "); put_dec_pad((kmalloc_used()+kmalloc_free()+heap_used()+heap_capacity())/1024,8); vga_puts("K  ");
+                              put_dec_pad(heap_used_kb,8); vga_puts("K  ");
+                              put_dec_pad((kmalloc_free()+heap_capacity()-heap_used())/1024,8); vga_puts("K\n");
     vga_putchar('\n');
 }
 
@@ -698,7 +710,10 @@ static void df_row(const char *name, const char *mnt, uint32_t total_kb, uint32_
     vga_puts("  "); vga_puts(name);
     int pad = 8 - (int)kstrlen(name);
     for (int p=0;p<pad;p++) vga_putchar(' ');
-    kprintf("%8uK  %8uK  %8uK  %3u%%  ", total_kb, used_kb, free_kb, pct);
+    put_dec_pad(total_kb,8); vga_puts("K  ");
+    put_dec_pad(used_kb,8);  vga_puts("K  ");
+    put_dec_pad(free_kb,8);  vga_puts("K  ");
+    put_dec_pad(pct,3);      vga_puts("%  ");
     vga_puts(mnt); vga_putchar('\n');
 }
 
