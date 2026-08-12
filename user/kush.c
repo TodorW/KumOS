@@ -159,9 +159,17 @@ static int do_uniq(char *argv[], int argc) {
     return 0;
 }
 
-static int do_head(char *argv[], int argc) {
+/* accepts both "-n N" (two args) and "-N" (bundled), like real head/tail */
+static int parse_n_flag(char *argv[], int argc, int *fi_out) {
     int n = 10, fi = 1;
-    if (argc>1 && argv[1][0]=='-') { n = atoi(argv[1]+1); fi = 2; }
+    if (argc>2 && !strcmp(argv[1],"-n")) { n = atoi(argv[2]); fi = 3; }
+    else if (argc>1 && argv[1][0]=='-' && argv[1][1]) { n = atoi(argv[1]+1); fi = 2; }
+    *fi_out = fi;
+    return n;
+}
+
+static int do_head(char *argv[], int argc) {
+    int fi; int n = parse_n_flag(argv, argc, &fi);
     int fd = 0;
     if (argc>fi) { fd = open(argv[fi]); if (fd<0) { printf("head: %s: not found\n", argv[fi]); return 1; } }
     static char buf[8192]; int total=0; int r;
@@ -180,8 +188,7 @@ static int do_head(char *argv[], int argc) {
 }
 
 static int do_tail(char *argv[], int argc) {
-    int n = 10, fi = 1;
-    if (argc>1 && argv[1][0]=='-') { n = atoi(argv[1]+1); fi = 2; }
+    int fi; int n = parse_n_flag(argv, argc, &fi);
     int fd = 0;
     if (argc>fi) { fd = open(argv[fi]); if (fd<0) { printf("tail: %s: not found\n", argv[fi]); return 1; } }
     static char buf[8192]; int total=0; int r;
