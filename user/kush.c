@@ -582,15 +582,12 @@ static int run_pipeline(char *line) {
         sys_dup2(pipefd[1], 1);
         close(pipefd[1]);
 
-        const char *cmd = argv[0];
-        int ret = 0;
-        if (!strcmp(cmd,"ls"))  ret=do_ls(argv,argc);
-        else if (!strcmp(cmd,"cat")) ret=do_cat(argv,argc);
-        else if (!strcmp(cmd,"echo")) ret=do_echo(argv,argc);
-        else if (!strcmp(cmd,"wc")) ret=do_wc(argv,argc);
-        else if (!strcmp(cmd,"sort")) ret=do_sort(argv,argc);
-        else if (!strcmp(cmd,"uniq")) ret=do_uniq(argv,argc);
-        else ret=do_exec(cmd);
+        /* was a hand-copied subset of dispatch_one's builtin list (ls/cat/
+           echo/wc/sort/uniq only) that drifted out of sync every time a
+           new builtin got added - route through dispatch_one itself so
+           every builtin (head/tail/grep included) works as a pipe stage,
+           not just the ones someone remembered to copy here */
+        int ret = dispatch_one(argv, argc);
         (void)ret;
 
         sys_dup2(saved_stdout, 1);
@@ -605,13 +602,7 @@ static int run_pipeline(char *line) {
         sys_dup2(pipefd[0], 0);
         close(pipefd[0]);
 
-        const char *cmd = argv[0];
-        int ret = 0;
-        if (!strcmp(cmd,"cat")) ret=do_cat(argv,argc);
-        else if (!strcmp(cmd,"wc")) ret=do_wc(argv,argc);
-        else if (!strcmp(cmd,"sort")) ret=do_sort(argv,argc);
-        else if (!strcmp(cmd,"uniq")) ret=do_uniq(argv,argc);
-        else ret=do_exec(cmd);
+        int ret = dispatch_one(argv, argc);
         (void)ret;
 
         sys_dup2(saved_stdin, 0);
