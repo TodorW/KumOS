@@ -1410,6 +1410,40 @@ static int launcher_hit(int mx, int my, int n) {
     return (row >= 0 && row < n) ? row : -1;
 }
 
+#define CTXMENU_ROW_H 16
+#define CTXMENU_W     140
+#define CTXMENU_ITEMS 3
+
+static int ctxmenu_open = 0;
+static int ctxmenu_x = 0, ctxmenu_y = 0;
+static const char *ctxmenu_labels[CTXMENU_ITEMS] = {"New Terminal","Cascade Windows","Tile Windows"};
+
+static void ctxmenu_rect(int *x, int *y, int *h) {
+    *h = CTXMENU_ITEMS*CTXMENU_ROW_H + 6;
+    *x = ctxmenu_x; *y = ctxmenu_y;
+    if (*x + CTXMENU_W > GUI_WIDTH)  *x = GUI_WIDTH  - CTXMENU_W;
+    if (*y + *h > GUI_HEIGHT)        *y = GUI_HEIGHT - *h;
+}
+
+static void draw_ctxmenu(void) {
+    int x, y, h; ctxmenu_rect(&x, &y, &h);
+    fill_rounded(x+2, y+2, CTXMENU_W, h, C_SHADOW);
+    fill_rounded(x, y, CTXMENU_W, h, C_WIN_BG);
+    outline_rounded(x, y, CTXMENU_W, h, C_WIN_BORDER);
+    for (int i=0;i<CTXMENU_ITEMS;i++) {
+        int ry = y+3+i*CTXMENU_ROW_H;
+        gui_puts(x+8, ry+4, ctxmenu_labels[i], C_WHITE, C_WIN_BG);
+    }
+}
+
+/* -2 = click outside the menu, -1 = inside but not on a row, >=0 = row index */
+static int ctxmenu_hit(int mx, int my) {
+    int x, y, h; ctxmenu_rect(&x, &y, &h);
+    if (!point_in(mx, my, x, y, CTXMENU_W, h)) return -2;
+    int row = (my - (y+3)) / CTXMENU_ROW_H;
+    return (row >= 0 && row < CTXMENU_ITEMS) ? row : -1;
+}
+
 void gui_run(void) {
     gui_init();
     term_init();
@@ -1419,7 +1453,7 @@ void gui_run(void) {
     zcount = 0;
     wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
 
-    int prev_left = 0;
+    int prev_left = 0, prev_right = 0;
     int dragging = -1, drag_ox = 0, drag_oy = 0;
     int resizing = -1, resize_ow = 0, resize_oh = 0, resize_mx = 0, resize_my = 0;
     int running = 1;
@@ -1442,6 +1476,7 @@ void gui_run(void) {
 
         gui_draw_taskbar();
         if (launcher_open) draw_launcher();
+        if (ctxmenu_open) draw_ctxmenu();
 
         mouse_state_t *m = mouse_get();
         int mx = m->x, my = m->y;
@@ -1455,7 +1490,8 @@ void gui_run(void) {
         if (key) {
             int top = wm_topmost();
             if (key == 27) {
-                if (launcher_open) launcher_open = 0;
+                if (ctxmenu_open) ctxmenu_open = 0;
+                else if (launcher_open) launcher_open = 0;
                 else if (top >= 0) wm_close(top);
                 else running = 0;
             } else if (top == WIN_TERMINAL) {
@@ -1489,8 +1525,25 @@ void gui_run(void) {
             }
         }
 
+        int right_now = m->right;
+        if (right_now && !prev_right && !ctxmenu_open && !launcher_open && my >= 10) {
+            int hitw = -1;
+            for (int i=zcount-1;i>=0 && hitw<0;i--) {
+                int t = zorder[i]; winrec_t *w = &wins[t];
+                if (w->active && !w->minimized && point_in(mx,my,w->x,w->y,w->w,w->h)) hitw = t;
+            }
+            if (hitw < 0) { ctxmenu_open = 1; ctxmenu_x = mx; ctxmenu_y = my; }
+        }
+        prev_right = right_now;
+
         int left_now = m->left;
-        if (left_now && !prev_left && launcher_open) {
+        if (left_now && !prev_left && ctxmenu_open) {
+            int row = ctxmenu_hit(mx, my);
+            ctxmenu_open = 0;
+            if (row == 0) wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
+            else if (row == 1) wm_cascade();
+            else if (row == 2) wm_tile();
+        } else if (left_now && !prev_left && launcher_open) {
             launch_item_t items[LAUNCH_MAX];
             int n = launcher_build(items, LAUNCH_MAX);
             int row = launcher_hit(mx, my, n);
