@@ -927,6 +927,7 @@ static void cmd_help(void) {
     vga_puts("    help, clear, echo, uname, whoami, hostname, uptime, history\n");
     vga_puts("    date              - Current date/time (RTC)\n");
     vga_puts("    cal               - This month's calendar\n");
+    vga_puts("    passwd            - Change your password\n");
     vga_puts("    mouse             - PS/2 mouse state\n");
     vga_puts("    beep [hz] [ms]    - PC speaker beep (default 1000hz 200ms)\n");
     vga_set_color(VGA_YELLOW,VGA_BLACK); vga_puts("  Files:\n");
@@ -1032,6 +1033,19 @@ static void dispatch(const char *line) {
         kprintf("%s (uid=%u)\n", u->name, u->uid);
     }
     else if(kstrcmp(cmd,"users")==0) { users_list(); }
+    else if(kstrcmp(cmd,"passwd")==0) {
+        user_t *u = users_get_current();
+        char oldp[32], newp[32], confirm[32];
+        vga_puts("Current password: "); keyboard_getline(oldp, 32);
+        if (users_check_pass(u->name, oldp) < 0) { vga_puts("passwd: incorrect password\n"); return; }
+        vga_puts("New password: "); keyboard_getline(newp, 32);
+        vga_puts("Confirm password: "); keyboard_getline(confirm, 32);
+        if (kstrcmp(newp, confirm) != 0) { vga_puts("passwd: passwords don't match\n"); return; }
+        users_set_pass(u->uid, newp);
+        vga_set_color(VGA_GREEN,VGA_BLACK);
+        vga_puts("Password updated.\n");
+        vga_set_color(VGA_WHITE,VGA_BLACK);
+    }
     else if(kstrcmp(cmd,"login")==0) {
         char uname[32], upass[32];
         vga_puts("Username: "); keyboard_getline(uname, 32);
