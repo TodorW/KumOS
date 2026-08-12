@@ -24,5 +24,6 @@ user_t *users_get_current(void);
 void users_set_current(int uid);
 void users_list(void);
 int  users_check_pass(const char *name, const char *pass);
+int  users_set_pass(uint32_t uid, const char *newpass);
 
 #endif

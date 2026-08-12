@@ -44,6 +44,16 @@ int users_add(const char *name, const char *pass, int is_root) {
     return (int)u->uid;
 }
 
+int users_set_pass(uint32_t uid, const char *newpass) {
+    for (int i=0;i<num_users;i++) {
+        if (users[i].active && users[i].uid==uid) {
+            hash_to_str(simple_hash(newpass), users[i].pass_hash);
+            return 0;
+        }
+    }
+    return -1;
+}
+
 int users_check_pass(const char *name, const char *pass) {
     for (int i=0;i<num_users;i++) {
         if (!users[i].active) continue;
