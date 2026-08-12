@@ -353,6 +353,7 @@ static int do_help(char *argv[], int argc) {
     fputs("    stat <file>       - File info\n");
     fputs("    date              - Current date/time\n");
     fputs("    history           - Command history\n");
+    fputs("    !!  !N            - Repeat last / Nth history entry\n");
     fputs("    exit [code]       - Exit shell\n");
     fputs("    kill <pid> [sig]  - Send signal\n\n");
     fputs("  /proc files:\n");
@@ -743,6 +744,20 @@ int main(void) {
             line[--len]=0;
 
         if (!*line) continue;
+
+        if (line[0]=='!') {
+            if (line[1]=='!' && line[2]==0) {
+                if (!hist_count) { fputs("kush: no history\n"); continue; }
+                strcpy(line, history[hist_count-1]);
+                printf("%s\n", line);
+            } else if (line[1]>='0'&&line[1]<='9') {
+                int idx = atoi(line+1);
+                if (idx<1 || idx>hist_count) { printf("kush: !%d: event not found\n", idx); continue; }
+                strcpy(line, history[idx-1]);
+                printf("%s\n", line);
+            }
+        }
+
         hist_add(line);
         last_exit = run_pipeline(line);
     }
