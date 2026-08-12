@@ -201,6 +201,25 @@ static int do_tail(char *argv[], int argc) {
     return 0;
 }
 
+static int do_grep(char *argv[], int argc) {
+    if (argc < 2) { fputs("grep: grep <pattern> [file]\n"); return 1; }
+    const char *pat = argv[1];
+    int fd = 0;
+    if (argc > 2) { fd = open(argv[2]); if (fd<0) { printf("grep: %s: not found\n", argv[2]); return 1; } }
+    static char buf[8192]; int total=0; int r;
+    while (total<(int)sizeof(buf)-1 && (r=fread(fd,buf+total,(uint32_t)(sizeof(buf)-total-1)))>0) total+=r;
+    buf[total]=0;
+    if (fd) close(fd);
+    char *p=buf;
+    while (*p) {
+        char *nl=strchr(p,'\n');
+        if (nl) *nl=0;
+        if (strstr(p,pat)) { fputs(p); putchar('\n'); }
+        p = nl ? nl+1 : p+strlen(p);
+    }
+    return 0;
+}
+
 static int do_cp(char *argv[], int argc) {
     if (argc < 3) { fputs("cp: cp <src> <dst>\n"); return 1; }
     int src = open(argv[1]);
@@ -320,6 +339,7 @@ static int do_help(char *argv[], int argc) {
     fputs("    cat <file>        - Print file\n");
     fputs("    head [-n N] [f]   - First N lines (default 10)\n");
     fputs("    tail [-n N] [f]   - Last N lines (default 10)\n");
+    fputs("    grep <pat> [f]    - Print matching lines\n");
     fputs("    cp <src> <dst>    - Copy file\n");
     fputs("    mv <src> <dst>    - Move/rename file\n");
     fputs("    set               - List shell variables\n");
@@ -389,6 +409,7 @@ static int dispatch_one(char *argv[], int argc) {
     if (!strcmp(cmd,"uniq"))    return do_uniq(argv,argc);
     if (!strcmp(cmd,"head"))    return do_head(argv,argc);
     if (!strcmp(cmd,"tail"))    return do_tail(argv,argc);
+    if (!strcmp(cmd,"grep"))    return do_grep(argv,argc);
     if (!strcmp(cmd,"cp"))      return do_cp(argv,argc);
     if (!strcmp(cmd,"mv"))      return do_mv(argv,argc);
     if (!strcmp(cmd,"rm"))      return do_rm(argv,argc);
