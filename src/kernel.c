@@ -844,7 +844,7 @@ static void cmd_help(void) {
     vga_puts("    cpuinfo  - CPU via CPUID\n");
     vga_puts("    irqinfo  - GDT/IDT/PIC/PIT/Sched live status\n");
     vga_puts("    ifconfig          - NIC info + IP address\n");
-    vga_puts("    ping              - Send UDP to gateway\n");
+    vga_puts("    ping [host]       - Real ICMP echo, RTT + loss stats (default gw)\n");
     vga_puts("    netrecv [port]    - Listen for UDP packet\n");
     vga_puts("    kill <pid> [sig]  - Send signal to process\n");
     vga_puts("    proc [file]       - Read /proc/file (meminfo,ps,uptime...)\n");
@@ -1074,10 +1074,52 @@ static void dispatch(const char *line) {
     else if(kstrcmp(cmd,"ping")==0) {
         if (!net_ready()) { vga_puts("No NIC.\n"); }
         else {
-            vga_puts("Sending UDP ping to 10.0.2.2:7 (echo port)...\n");
-            const char *msg = "KumOS ping";
-            int r = net_send_udp(NET_IP(10,0,2,2), 1234, 7, msg, 10);
-            kprintf("  Result: %s\n", r==0?"sent OK":"send failed");
+            char target[64];
+            kstrcpy(target, *rest ? rest : "10.0.2.2");
+
+            uint32_t dst_ip; uint16_t junk_port;
+            if (pkgnet_parse_addr(target, &dst_ip, &junk_port) != 0) {
+                dst_ip = dns_resolve(target);
+                if (!dst_ip) { kprintf("ping: %s: could not resolve\n", target); return; }
+            }
+            kprintf("PING %s (%u.%u.%u.%u): 32 data bytes\n", target,
+                    (dst_ip>>24)&0xFF,(dst_ip>>16)&0xFF,(dst_ip>>8)&0xFF,dst_ip&0xFF);
+
+            int sent=0, recvd=0;
+            uint32_t rtt_total=0, rtt_min=0xFFFFFFFF, rtt_max=0;
+            uint8_t payload[32];
+            for (int i=0;i<32;i++) payload[i]=(uint8_t)i;
+
+            for (int seq=1; seq<=4; seq++) {
+                uint32_t t0 = timer_ticks();
+                net_send_icmp_echo(dst_ip, 0x4B75, (uint16_t)seq, payload, 32);
+                sent++;
+
+                int got=0;
+                uint32_t deadline = t0 + 100;
+                while (timer_ticks() < deadline) {
+                    uint32_t from; uint16_t rid, rseq; uint8_t ttl;
+                    if (net_icmp_poll_reply(&from,&rid,&rseq,&ttl) &&
+                        from==dst_ip && rid==0x4B75 && rseq==(uint16_t)seq) {
+                        uint32_t rtt_ms = (timer_ticks()-t0)*10;
+                        kprintf("32 bytes from %u.%u.%u.%u: icmp_seq=%d ttl=%d time=%ums\n",
+                                (from>>24)&0xFF,(from>>16)&0xFF,(from>>8)&0xFF,from&0xFF,
+                                seq, ttl, rtt_ms);
+                        recvd++; got=1;
+                        if (rtt_ms<rtt_min) rtt_min=rtt_ms;
+                        if (rtt_ms>rtt_max) rtt_max=rtt_ms;
+                        rtt_total += rtt_ms;
+                        break;
+                    }
+                }
+                if (!got) kprintf("Request timeout for icmp_seq %d\n", seq);
+                timer_sleep(50);
+            }
+
+            kprintf("\n--- %s ping statistics ---\n", target);
+            kprintf("%d packets transmitted, %d received, %d%% packet loss\n",
+                    sent, recvd, sent ? (100*(sent-recvd)/sent) : 0);
+            if (recvd) kprintf("rtt min/avg/max = %u/%u/%u ms\n", rtt_min, rtt_total/(uint32_t)recvd, rtt_max);
         }
     }
     else if(kstrcmp(cmd,"netrecv")==0) {
