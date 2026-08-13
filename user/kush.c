@@ -501,7 +501,11 @@ static int do_help(char *argv[], int argc) {
     fputs("    COUNTER.ELF       - Counter demo\n");
     fputs("    CAT.ELF           - File reader\n");
     fputs("    SYSINFO.ELF       - System info\n\n");
-    fputs("  Pipes:  cmd1 | cmd2\n\n");
+    fputs("  Pipes:  cmd1 | cmd2 | cmd3 (any number of stages)\n\n");
+    fputs("  Scripts (source <file> or . <file>), one keyword per own line:\n");
+    fputs("    if <cmd> / then / ... / else / ... / fi\n");
+    fputs("    for VAR in a b c / do / ... / done\n");
+    fputs("    while <cmd> / do / ... / done\n\n");
     return 0;
 }
 
@@ -854,26 +858,142 @@ static void motd(void) {
     printf("\n  kush v%s - KumOS Shell  (type 'help')\n\n", KUSH_VER);
 }
 
+/* Real control flow for scripts: if/then/else/fi, for VAR in .../do/done,
+   while <cmd>/do/done. Deliberately scoped down from real shell syntax -
+   each keyword needs its own line (no "if cond; then" on one line) - to
+   keep the block matcher a simple depth counter instead of a real
+   tokenizer. Nesting works (any mix of if/for/while), nothing else does:
+   no elif, no break/continue, no arithmetic, no functions. */
+#define SCRIPT_MAX_LINES 200
+
+static int is_block_open(const char *l) {
+    return !strncmp(l,"if ",3) || !strcmp(l,"if") || !strncmp(l,"for ",4) || !strncmp(l,"while ",6);
+}
+static int is_block_close(const char *l) {
+    return !strcmp(l,"fi") || !strcmp(l,"done");
+}
+
+/* Advances *idx to the matching fi/done for the block whose body starts
+   at *idx (already past the opening line), landing ON that close line -
+   used both for "skip the branch we're not taking" and "find where a
+   loop body ends" duty. */
+static void skip_block(char *lines[], int n, int *idx) {
+    int depth = 1;
+    while (*idx < n) {
+        char *l = lines[*idx];
+        if (is_block_open(l)) depth++;
+        else if (is_block_close(l)) { depth--; if (!depth) return; }
+        (*idx)++;
+    }
+}
+
+/* Same, but also stops early on a same-depth "else" (for skipping an
+   if-branch that wasn't taken, which needs to land on either). */
+static void skip_to_else_or_close(char *lines[], int n, int *idx) {
+    int depth = 1;
+    while (*idx < n) {
+        char *l = lines[*idx];
+        if (is_block_open(l)) { depth++; (*idx)++; continue; }
+        if (is_block_close(l)) { depth--; if (!depth) return; (*idx)++; continue; }
+        if (depth==1 && !strcmp(l,"else")) return;
+        (*idx)++;
+    }
+}
+
+static int script_exec_block(char *lines[], int n, int *idx) {
+    int ret = 0;
+    while (*idx < n) {
+        char *line = lines[*idx];
+        if (!strcmp(line,"fi") || !strcmp(line,"done") || !strcmp(line,"else")) return ret;
+
+        if (!strncmp(line,"if ",3) || !strcmp(line,"if")) {
+            char cond[CMD_MAX]; strncpy(cond, line+2, CMD_MAX-1); cond[CMD_MAX-1]=0;
+            char *c = cond; while (*c==' ') c++;
+            (*idx)++;
+            if (*idx<n && !strcmp(lines[*idx],"then")) (*idx)++;
+
+            int cret = run_pipeline(c);
+            if (cret == 0) ret = script_exec_block(lines, n, idx);
+            else            skip_to_else_or_close(lines, n, idx);
+
+            if (*idx<n && !strcmp(lines[*idx],"else")) {
+                (*idx)++;
+                if (cret != 0) ret = script_exec_block(lines, n, idx);
+                else           skip_block(lines, n, idx);
+            }
+            if (*idx<n && !strcmp(lines[*idx],"fi")) (*idx)++;
+            continue;
+        }
+
+        if (!strncmp(line,"while ",6)) {
+            char cond[CMD_MAX]; strncpy(cond, line+6, CMD_MAX-1); cond[CMD_MAX-1]=0;
+            (*idx)++;
+            if (*idx<n && !strcmp(lines[*idx],"do")) (*idx)++;
+            int body_start = *idx;
+
+            int guard = 0; /* hard cap - a script bug shouldn't hang the shell forever */
+            while (run_pipeline(cond) == 0 && guard < 10000) {
+                int bi = body_start;
+                ret = script_exec_block(lines, n, &bi);
+                guard++;
+            }
+            *idx = body_start;
+            skip_block(lines, n, idx);
+            if (*idx<n && !strcmp(lines[*idx],"done")) (*idx)++;
+            continue;
+        }
+
+        if (!strncmp(line,"for ",4)) {
+            char rest[CMD_MAX]; strncpy(rest, line+4, CMD_MAX-1); rest[CMD_MAX-1]=0;
+            char *fargv[ARG_MAX]; int fargc = split(rest, fargv, ARG_MAX);
+            (*idx)++;
+            if (*idx<n && !strcmp(lines[*idx],"do")) (*idx)++;
+            int body_start = *idx;
+
+            if (fargc < 3 || strcmp(fargv[1],"in") != 0) {
+                fputs("kush: for: syntax: for VAR in item1 item2 ...\n");
+            } else {
+                for (int k=2; k<fargc; k++) {
+                    var_set(fargv[0], (int)strlen(fargv[0]), fargv[k]);
+                    int bi = body_start;
+                    ret = script_exec_block(lines, n, &bi);
+                }
+            }
+            *idx = body_start;
+            skip_block(lines, n, idx);
+            if (*idx<n && !strcmp(lines[*idx],"done")) (*idx)++;
+            continue;
+        }
+
+        ret = run_pipeline(line);
+        (*idx)++;
+    }
+    return ret;
+}
+
 static int run_script(const char *filename) {
     int fd = open(filename);
     if (fd < 0) { printf("kush: %s: not found\n", filename); return 1; }
-    char buf[4096]; int n = fread(fd, buf, sizeof(buf)-1);
+    static char buf[4096]; int n = fread(fd, buf, sizeof(buf)-1);
     close(fd);
     if (n <= 0) return 0;
     buf[n] = 0;
 
-    char *p = buf; int ret = 0;
-    while (*p) {
+    static char *lines[SCRIPT_MAX_LINES];
+    int nlines = 0;
+    char *p = buf;
+    while (*p && nlines < SCRIPT_MAX_LINES) {
         char *nl = strchr(p, '\n');
         if (nl) *nl = 0;
         while (*p == ' ' || *p == '\t') p++;
-        if (*p && *p != '#') {
-            char line[256]; strncpy(line, p, 255);
-            ret = run_pipeline(line);
-        }
+        char *end = p + strlen(p);
+        while (end > p && (end[-1]==' '||end[-1]=='\t'||end[-1]=='\r')) *--end = 0;
+        if (*p && *p != '#') lines[nlines++] = p;
         p = nl ? nl+1 : p+strlen(p);
     }
-    return ret;
+
+    int idx = 0;
+    return script_exec_block(lines, nlines, &idx);
 }
 
 int main(void) {
