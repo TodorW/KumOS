@@ -234,13 +234,17 @@ static int do_grep(char *argv[], int argc) {
     buf[total]=0;
     if (fd) close(fd);
     char *p=buf;
+    int found = 0;
     while (*p) {
         char *nl=strchr(p,'\n');
         if (nl) *nl=0;
-        if (strstr(p,pat)) { fputs(p); putchar('\n'); }
+        if (strstr(p,pat)) { fputs(p); putchar('\n'); found = 1; }
         p = nl ? nl+1 : p+strlen(p);
     }
-    return 0;
+    /* real grep exit status: 0 if a match was found, 1 if not - this is
+       what makes `if grep pat file` (or in a script's if/while condition)
+       actually mean something instead of always being true. */
+    return found ? 0 : 1;
 }
 
 static int do_cp(char *argv[], int argc) {
