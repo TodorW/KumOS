@@ -65,6 +65,7 @@ int  vfs_write (int fd, const void *buf, uint32_t len);
 int  vfs_stat  (const char *path, vfs_stat_t *st);
 int  vfs_readdir(const char *path, char *buf, uint32_t sz);
 int  vfs_unlink(const char *path);
+int  vfs_chmod (const char *path, const char *mode);
 int  vfs_getcwd(char *buf, uint32_t sz);
 int  vfs_chdir (const char *path);
 

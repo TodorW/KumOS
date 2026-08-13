@@ -27,6 +27,9 @@ int  fat12_write(const char *name, const void *buf, uint32_t size);
 
 int  fat12_delete(const char *name);
 
+int  fat12_set_readonly(const char *name, int ro);
+int  fat12_is_readonly(const char *name);
+
 int  fat12_format(int ata_drive, const char *label);
 
 void fat12_info(void);

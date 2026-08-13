@@ -31,6 +31,7 @@
 #define SYS_CHDIR    24
 #define SYS_STAT     25
 #define SYS_UNLINK   26
+#define SYS_CHMOD    27
 #define SYS_GETPPID  28
 #define SYS_ISATTY   29
 #define SYS_KILL     30

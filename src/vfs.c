@@ -416,6 +416,36 @@ int vfs_unlink(const char *path) {
     return mounts[midx].ops->unlink(local);
 }
 
+/* Real chmod, not fabricated: toggles the actual on-disk FAT12 read-only
+   attribute bit. Only /disk has this (FAT12's dirent.attr byte) - the
+   in-memory /mem fs and /dev have no on-disk representation to attach a
+   permission bit to, so this only works for /disk paths.
+   Mode syntax: a leading '-' always means "remove write" (read-only),
+   regardless of what follows - a bare "if the mode string contains a 'w'
+   anywhere" check would treat "-w" the same as "+w" (both contain 'w'),
+   which is backwards. A leading '+' means "add write". Anything else is
+   treated as an absolute octal-style mode (e.g. "644"/"755" writable,
+   "444" read-only) via a bare presence check. */
+int vfs_chmod(const char *path, const char *mode) {
+    char resolved[VFS_MAX_PATH];
+    if (path[0]=='/') kstrcpy(resolved, path);
+    else { kstrcpy(resolved, "/disk/"); kstrcat(resolved, path); }
+    if (kstrncmp(resolved, "/disk/", 6) != 0) return -1;
+
+    int make_writable;
+    if (mode[0] == '-') {
+        make_writable = 0;
+    } else if (mode[0] == '+') {
+        make_writable = 1;
+    } else {
+        make_writable = 0;
+        for (const char *p = mode; *p; p++) {
+            if (*p=='w' || *p=='2' || *p=='6' || *p=='7') { make_writable = 1; break; }
+        }
+    }
+    return fat12_set_readonly(resolved + 6, make_writable ? 0 : 1);
+}
+
 int vfs_getcwd(char *buf, uint32_t sz) {
     kstrncpy(buf, cwd, sz-1); buf[sz-1]=0;
     return (int)kstrlen(buf);

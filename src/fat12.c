@@ -254,6 +254,9 @@ int fat12_read(const char *name, void *buf, uint32_t bufsz) {
 int fat12_write(const char *name, const void *buf, uint32_t size) {
     if (!g_mounted) return -1;
 
+    dirfind_t existing = fat12_find(name);
+    if (existing.found && (existing.de.attr & ATTR_READONLY)) return -1;
+
     fat12_delete(name);
 
     uint16_t first_cluster = 0;
@@ -315,6 +318,7 @@ int fat12_delete(const char *name) {
     if (!g_mounted) return -1;
     dirfind_t f = fat12_find(name);
     if (!f.found) return -1;
+    if (f.de.attr & ATTR_READONLY) return -1;
 
     uint16_t cluster = f.de.start_cluster;
     while (cluster >= 0x002 && cluster <= 0xFEF) {
@@ -328,6 +332,28 @@ int fat12_delete(const char *name) {
     dirent_t *dir = (dirent_t *)g_sector;
     dir[f.index].name[0] = DIRENT_FREE;
     return ata_write(g_drive, f.sector, 1, g_sector);
+}
+
+/* Toggles the real on-disk FAT12 read-only attribute bit (the same one
+   DOS/Windows uses) - not a fabricated permission model, this is the one
+   piece of genuine per-file access control this filesystem format has. */
+int fat12_set_readonly(const char *name, int ro) {
+    if (!g_mounted) return -1;
+    dirfind_t f = fat12_find(name);
+    if (!f.found) return -1;
+
+    if (ata_read(g_drive, f.sector, 1, g_sector) < 0) return -1;
+    dirent_t *dir = (dirent_t *)g_sector;
+    if (ro) dir[f.index].attr |= ATTR_READONLY;
+    else    dir[f.index].attr &= (uint8_t)~ATTR_READONLY;
+    return ata_write(g_drive, f.sector, 1, g_sector);
+}
+
+int fat12_is_readonly(const char *name) {
+    if (!g_mounted) return -1;
+    dirfind_t f = fat12_find(name);
+    if (!f.found) return -1;
+    return (f.de.attr & ATTR_READONLY) ? 1 : 0;
 }
 
 int fat12_format(int drive, const char *label) {

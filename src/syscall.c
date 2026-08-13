@@ -256,6 +256,11 @@ static uint32_t sc_vfs_unlink(uint32_t path, uint32_t b, uint32_t c) {
     if (!path) return (uint32_t)-1;
     return (uint32_t)vfs_unlink((const char *)path);
 }
+static uint32_t sc_vfs_chmod(uint32_t path, uint32_t mode, uint32_t c) {
+    (void)c;
+    if (!path||!mode) return (uint32_t)-1;
+    return (uint32_t)vfs_chmod((const char *)path, (const char *)mode);
+}
 static uint32_t sc_vfs_pipe(uint32_t fds, uint32_t b, uint32_t c) {
     (void)b;(void)c;
     if (!fds) return (uint32_t)-1;
@@ -517,6 +522,7 @@ static syscall_fn syscall_table[SYSCALL_MAX] = {
     [SYS_CHDIR]   = sc_vfs_chdir,
     [SYS_STAT]    = sc_vfs_stat,
     [SYS_UNLINK]  = sc_vfs_unlink,
+    [SYS_CHMOD]   = sc_vfs_chmod,
     [SYS_GETPPID] = sc_getppid,
     [SYS_ISATTY]  = sc_isatty,
     [SYS_KILL]    = sc_kill,
