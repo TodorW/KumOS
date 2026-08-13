@@ -461,9 +461,13 @@ static int point_in(int px, int py, int x, int y, int w, int h) {
 #define ICON_START_Y 16
 #define ICON_SLOT    38
 
+/* WIN_TERMINAL/WIN_TERMINAL2/WIN_TERMINAL3 are 3 independent terminal
+   window slots (index i maps to terms[i] - see term_cur above) rather
+   than 3 different kinds of window; kept contiguous so range checks
+   (t>=WIN_TERMINAL && t<=WIN_TERMINAL3) work for "is this a terminal". */
 typedef enum {
-    WIN_TERMINAL=0, WIN_FILES=1, WIN_SYSMON=2,
-    WIN_CALC=3, WIN_EDITOR=4, WIN_PKG=5, WIN_COUNT=6
+    WIN_TERMINAL=0, WIN_TERMINAL2=1, WIN_TERMINAL3=2, WIN_FILES=3, WIN_SYSMON=4,
+    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_COUNT=8
 } wintype_t;
 
 typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
@@ -474,7 +478,9 @@ static int      zcount = 0;
 
 static const char *win_title(int t) {
     switch (t) {
-        case WIN_TERMINAL: return "Terminal";
+        case WIN_TERMINAL:  return "Terminal";
+        case WIN_TERMINAL2: return "Terminal 2";
+        case WIN_TERMINAL3: return "Terminal 3";
         case WIN_FILES:    return "Files";
         case WIN_SYSMON:   return "System Monitor";
         case WIN_CALC:     return "Calculator";
@@ -679,23 +685,63 @@ void gui_draw_desktop(void) {
 #define TERM_FG_OK    C_LIGHT_GREEN
 #define TERM_FG_INFO  C_YELLOW
 
-static char    term_lines[TERM_ROWS][TERM_COLS+1];
-static uint8_t term_colors[TERM_ROWS];
-static int     term_row = 0;
-static char    term_input[TERM_COLS+1];
-static int     term_icur = 0;
-
+/* Multiple independent terminal windows (WIN_TERMINAL/2/3, see wintype_t):
+   all the terminal state that used to be bare globals - one singleton
+   terminal was all the window manager could ever open, "New Terminal" on
+   the desktop context menu just refocused it despite the label - now
+   lives per-instance here. term_cur selects which instance the term_*
+   helpers below operate on; every call site sets it right before calling
+   into them (render, keyboard routing, the Packages "Run" / launcher
+   shortcuts that inject a command into a specific terminal). */
 #define TERM_HIST 8
-static char term_hist[TERM_HIST][TERM_COLS+1];
-static int  term_hist_count = 0;
+#define MAX_TERMS 3
 
-static void term_init(void) {
+typedef struct {
+    char    lines[TERM_ROWS][TERM_COLS+1];
+    uint8_t colors[TERM_ROWS];
+    int     row;
+    char    input[TERM_COLS+1];
+    int     icur;
+    char    hist[TERM_HIST][TERM_COLS+1];
+    int     hist_count;
+} term_t;
+
+static term_t terms[MAX_TERMS];
+static int    term_cur = 0;
+
+#define term_lines       (terms[term_cur].lines)
+#define term_colors      (terms[term_cur].colors)
+#define term_row         (terms[term_cur].row)
+#define term_input       (terms[term_cur].input)
+#define term_icur        (terms[term_cur].icur)
+#define term_hist        (terms[term_cur].hist)
+#define term_hist_count  (terms[term_cur].hist_count)
+
+static void term_init(int idx) {
+    int saved = term_cur; term_cur = idx;
     for (int i=0;i<TERM_ROWS;i++) { term_lines[i][0]=0; term_colors[i]=TERM_FG; }
     kstrcpy(term_lines[0], "KumOS GUI terminal"); term_colors[0]=TERM_FG_INFO;
     kstrcpy(term_lines[1], "help for commands, exit to close"); term_colors[1]=TERM_FG_INFO;
     term_row = 2;
     term_input[0]=0; term_icur=0;
     term_hist_count = 0;
+    term_cur = saved;
+}
+
+/* Real "New Terminal": opens the first inactive terminal slot (each one
+   its own independent window with its own scrollback/input/history),
+   offsetting position a bit per slot so they don't land exactly on top
+   of each other. Falls back to just focusing slot 0 if all 3 are already
+   open - a fixed small pool, not truly unbounded, but a real second/
+   third window where before this only ever refocused the same one. */
+static void wm_open_new_terminal(void) {
+    for (int i = 0; i < MAX_TERMS; i++) {
+        if (!wins[WIN_TERMINAL + i].active) {
+            wm_open(WIN_TERMINAL + i, 40 + i*24, 20 + i*24, TERM_W, TERM_H);
+            return;
+        }
+    }
+    wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
 }
 
 static void term_scroll(void) {
@@ -984,7 +1030,7 @@ static void term_exec(const char *cmd) {
             }
         }
     } else if (kstrcmp(cmd,"exit")==0) {
-        wm_close(WIN_TERMINAL);
+        wm_close(WIN_TERMINAL + term_cur);
     } else if (*cmd) {
         kstrcpy(line, "Unknown: "); kstrcat(line, cmd);
         term_puts_c(line, TERM_FG_ERR);
@@ -1333,6 +1379,7 @@ static void pkg_handle_click(winrec_t *w, int mx, int my) {
         if (!pkgwin_installed(pkg_selected)) { kstrcpy(pkg_status, "install it first"); return; }
 
         wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
+        term_cur = 0;
 
         char cmdbuf[TERM_COLS+1];
         kstrcpy(cmdbuf, "exec "); kstrcat(cmdbuf, pkgwin_fname(pkg_selected));
@@ -1392,6 +1439,7 @@ static void launcher_open_wintype(int t) {
 
 static void launcher_run_pkg(int pkg_idx) {
     wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
+    term_cur = 0;
     char cmdbuf[TERM_COLS+1];
     kstrcpy(cmdbuf, "exec "); kstrcat(cmdbuf, pkgwin_fname(pkg_idx));
     char echo[TERM_COLS+3];
@@ -1462,7 +1510,7 @@ static int ctxmenu_hit(int mx, int my) {
 
 void gui_run(void) {
     gui_init();
-    term_init();
+    for (int i=0;i<MAX_TERMS;i++) term_init(i);
     editor_init_buf();
 
     for (int i=0;i<WIN_COUNT;i++) wins[i].active = 0;
@@ -1482,7 +1530,7 @@ void gui_run(void) {
             int t = zorder[i];
             winrec_t *w = &wins[t];
             if (!w->active || w->minimized) continue;
-            if (t==WIN_TERMINAL) render_terminal(w);
+            if (t>=WIN_TERMINAL && t<=WIN_TERMINAL3) { term_cur = t - WIN_TERMINAL; render_terminal(w); }
             else if (t==WIN_FILES) render_files(w);
             else if (t==WIN_SYSMON) render_sysmon(w);
             else if (t==WIN_CALC) render_calc(w);
@@ -1512,7 +1560,8 @@ void gui_run(void) {
                 else running = 0;
             } else if (key == '\t' && keyboard_alt_held()) {
                 wm_cycle_focus();
-            } else if (top == WIN_TERMINAL) {
+            } else if (top >= WIN_TERMINAL && top <= WIN_TERMINAL3) {
+                term_cur = top - WIN_TERMINAL;
                 if (key == '\n') {
                     char echo[TERM_COLS+3];
                     kstrcpy(echo, "> "); kstrcat(echo, term_input);
@@ -1558,7 +1607,7 @@ void gui_run(void) {
         if (left_now && !prev_left && ctxmenu_open) {
             int row = ctxmenu_hit(mx, my);
             ctxmenu_open = 0;
-            if (row == 0) wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
+            if (row == 0) wm_open_new_terminal();
             else if (row == 1) wm_cascade();
             else if (row == 2) wm_tile();
         } else if (left_now && !prev_left && launcher_open) {
