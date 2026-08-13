@@ -35,9 +35,13 @@ static void task_setup_stack(task_t *t, void (*entry)(void)) {
     uint32_t *sp = (uint32_t *)((uint8_t *)t->stack + t->stack_size);
 
     /* switch_context resumes a task via a bare `ret` after popping
-       edi,esi,ebx,ebp (no iret) — these are ring-0 kernel tasks, no
-       privilege transition needed, so the resume target is just `entry`. */
+       edi,esi,ebx,ebp,eflags (no iret) — these are ring-0 kernel tasks, no
+       privilege transition needed, so the resume target is just `entry`.
+       eflags=0x202 (IF set) since a freshly-started kernel task should run
+       with interrupts enabled, same as everything else that isn't parked
+       mid-epilogue. */
     *--sp = (uint32_t)entry;
+    *--sp = 0x202;
     *--sp = 0;
     *--sp = 0;
     *--sp = 0;
@@ -187,7 +191,25 @@ void sched_yield(void) {
     uint32_t *old_esp_ptr = &tasks[prev].esp;
     uint32_t  new_esp     =  tasks[next].esp;
 
-    __asm__ volatile ("sti");
+    /* Was a blanket "sti" here before switch_context() - real bug, since
+       current_idx is already updated to `next` above but the stack swap
+       hasn't happened yet. switch_context() now saves/restores EFLAGS
+       itself via pushfd/popfd (boot/sched_switch.asm) instead of a blanket
+       sti, so each task resumes with its own last-saved interrupt state.
+       This fixed a real reentrancy corruption (confirmed via serial
+       tracing: a nested timer tick landing in the old sti-then-switch gap
+       corrupted the register frame of whichever task was mid-switch), but
+       kush's do_exec() still can't safely use real fork()+exec()+wait() -
+       a second, deeper bug remains in the scheduler's handling of a task
+       that yields many times in a loop (sched_waitpid()'s busy-wait) then
+       finally returns to ring 3: the syscall's own saved iret frame reads
+       back correct right up to the last C statement before isr128's
+       fixed pop/iret epilogue (verified with -O0 on the whole call chain,
+       ruling out an optimizer bug), yet the actual iret lands in garbage
+       stack-address-looking values. Root cause not found this round -
+       see feedback-kumos-commit-style / project-kumos-round14 memory.
+       do_exec() is back to the safe self-replacing sys_exec() rather than
+       ship a reproducible crash. */
     switch_context(old_esp_ptr, new_esp);
 }
 
