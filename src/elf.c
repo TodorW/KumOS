@@ -114,6 +114,27 @@ elf_load_result_t elf_load_disk(const char *filename) {
     return elf_load_mem(elf_load_buf, (uint32_t)n);
 }
 
+/* Header-only check, no mapping/copy side effects - used by execve() to
+   fail fast on a missing/bad target before it tears down the caller's own
+   address space. elf_load_disk() itself always maps+copies into whatever
+   directory is currently active, which used to make execve()'s old
+   pre-flight call (checking the target exists before committing to the
+   clone+switch) overwrite the caller's own still-running code. */
+int elf_validate_disk(const char *filename) {
+    if (!fat12_mounted()) return -1;
+
+    int n = fat12_read(filename, elf_load_buf, ELF_MAX_SIZE);
+    if (n <= 0) {
+        fs_file_t *mf = fs_find(filename);
+        if (!mf) return -1;
+        n = (int)mf->size;
+        if (n > ELF_MAX_SIZE) n = ELF_MAX_SIZE;
+        kmemcpy(elf_load_buf, mf->data, (uint32_t)n);
+    }
+    if ((uint32_t)n < sizeof(elf32_hdr_t)) return -1;
+    return elf_validate((const elf32_hdr_t *)elf_load_buf);
+}
+
 static void elf_placeholder(void) {
     for (;;) __asm__ volatile ("hlt");
 }

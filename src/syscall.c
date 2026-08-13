@@ -305,8 +305,14 @@ static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_
     upper[i]=0;
     if(!kstrchr(upper,'.')) { kstrcat(upper,".ELF"); }
 
-    elf_load_result_t r = elf_load_disk(upper);
-    if (r.error != 0) return (uint32_t)-1;
+    /* Header-only pre-check (no mapping side effects) - the old code here
+       called the real elf_load_disk() just to see if the target existed,
+       which maps+copies into whatever directory is CURRENTLY active (the
+       caller's own, still-running one) and overwrites it in place, since
+       every user ELF loads at the same vaddr (linker.ld -Ttext=0x400000).
+       That clobbered the caller's own code out from under itself before
+       we'd even committed to replacing it. */
+    if (elf_validate_disk(upper) != 0) return (uint32_t)-1;
 
     task_t *cur = sched_current();
 
@@ -321,7 +327,12 @@ static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_
     paging_switch(new_dir);
 
     elf_load_result_t r2 = elf_load_disk(upper);
-    if (r2.error != 0) { paging_switch(0); return (uint32_t)-1; }
+    /* Was paging_switch(0) here - CR3=0 is not a valid directory and would
+       triple-fault the instant anything touched memory. new_dir (already
+       switched to above) is a real, valid, freshly-cloned directory, just
+       missing the target's code - leaving CR3 there is what actually lets
+       this error return make it back to the caller instead of crashing. */
+    if (r2.error != 0) return (uint32_t)-1;
 
     kstrcpy(cur->name, upper);
     cur->argc = 0;

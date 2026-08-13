@@ -55,6 +55,8 @@ elf_load_result_t elf_load_mem(const void *buf, uint32_t bufsz);
 
 elf_load_result_t elf_load_disk(const char *filename);
 
+int elf_validate_disk(const char *filename);
+
 int elf_spawn(const char *name, elf_load_result_t *res);
 
 int elf_validate(const elf32_hdr_t *hdr);
