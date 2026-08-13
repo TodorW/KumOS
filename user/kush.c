@@ -513,18 +513,31 @@ static int do_exec(const char *cmd) {
 
     if (!strchr(upper, '.')) { strcat(upper, ".ELF"); }
 
-    /* NOTE: this replaces kush itself (real execve, no fork) - a genuine
-       fork()+exec()+wait() was attempted here but hit a deep, pre-existing
-       kernel bug: paging_clone_dir() aliases (doesn't deep-copy) page
-       directory entries below 1GB on the assumption that region is
-       kernel-only, but user ELF code actually loads at 0x400000 - well
-       within that "shared" range. A forked child's execve() then
-       overwrites the same physical pages as its parent's code, so the
-       parent resumes executing garbage. A real fix needs page-table-level
-       (not just page-directory-level) granularity in paging_clone_dir()/
-       paging_free_user() to separate user code from the shared kernel
-       heap that lives in the same 4MB region - left for a follow-up
-       session rather than shipping something that hangs/crashes. */
+    /* NOTE: this replaces kush itself (real execve, no fork). A real
+       fork()+exec()+wait() was tried again this round and got much
+       further than before: the round12/13 bug (paging_clone_dir()
+       aliasing the page directory entry user ELF code loads into, PDE 1
+       at virt 0x400000) is genuinely fixed now - see src/paging.c's
+       comments on paging_clone_dir()/pte_ptr() - and a real, separate
+       reentrancy bug in sched_yield() (a premature `sti` before the
+       actual stack-pointer swap in switch_context(), letting a nested
+       timer tick corrupt a mid-switch task's register frame) is also
+       fixed, verified by serial-tracing the corrupted invalid-opcode
+       panic it caused and watching it disappear.
+
+       But a THIRD, deeper bug remains: after sched_waitpid()'s busy-wait
+       loop yields many times (waiting for the forked child to exit) and
+       finally returns, kush's own return-to-ring-3 (the plain `iret` at
+       the end of isr128) lands in garbage - EIP and ESP both end up as
+       stack-address-looking values, not the correct saved ones. Confirmed
+       via serial tracing that the syscall's own saved register frame
+       reads back correct right up to the very last C statement before
+       isr128's fixed pop/iret sequence runs (with interrupts confirmed
+       off throughout, and even with -O0 forced on the entire call chain
+       to rule out a compiler bug) - yet the actual iret still picks up
+       wrong values. Root cause not found this round. Left as plain
+       sys_exec() rather than ship a reproducible crash; see
+       project-kumos-round14 memory for the full debugging trail. */
     int r = sys_exec(upper);
     if (r < 0) { printf("kush: %s: not found\n", cmd); return 127; }
     return r;
