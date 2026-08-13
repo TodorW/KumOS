@@ -87,54 +87,6 @@ static void put_dec_pad(uint32_t v, int width) {
     vga_puts(buf);
 }
 
-static void zpad2(uint32_t v, char *out) {
-    out[0] = '0' + ((v/10)%10);
-    out[1] = '0' + (v%10);
-    out[2] = 0;
-}
-
-static void statusbar_seg(int *x, const char *text, vga_color fg) {
-    vga_puts_at(text, *x, 0, fg, VGA_DARK_GREY);
-    *x += (int)kstrlen(text) + 2;
-}
-
-static void draw_statusbar(void) {
-    vga_fill_rect(0,0,80,1,' ',VGA_WHITE,VGA_DARK_GREY);
-
-    const char *badge = " \x01 KumOS ";
-    vga_puts_at(badge, 0, 0, VGA_WHITE, VGA_LIGHT_CYAN);
-    int x = (int)kstrlen(badge) + 2;
-
-    uint32_t secs = timer_seconds();
-    char ubuf[20] = "up ", num[12];
-    kitoa(secs/3600, num, 10); kstrcat(ubuf, num); kstrcat(ubuf, "h");
-    char mm[3]; zpad2((secs/60)%60, mm); kstrcat(ubuf, mm); kstrcat(ubuf, "m");
-    statusbar_seg(&x, ubuf, VGA_LIGHT_GREEN);
-
-    task_t *t = sched_current();
-    char tbuf[40]; kstrcpy(tbuf, t->name);
-    statusbar_seg(&x, tbuf, VGA_LIGHT_MAGENTA);
-
-    char mb[16] = "mem "; char kb[12];
-    kitoa(kmalloc_used()/1024, kb, 10); kstrcat(mb, kb); kstrcat(mb, "K");
-    statusbar_seg(&x, mb, VGA_YELLOW);
-
-    vga_puts_at(kum_active ? "root" : "user", x, 0,
-                kum_active?VGA_LIGHT_RED:VGA_LIGHT_BLUE, VGA_DARK_GREY);
-
-    rtc_time_t now = rtc_read();
-    char clk[10]; char hh[3], mi[3], ss[3];
-    zpad2(now.hour,hh); zpad2(now.minute,mi); zpad2(now.second,ss);
-    kstrcpy(clk, hh); kstrcat(clk,":"); kstrcat(clk,mi); kstrcat(clk,":"); kstrcat(clk,ss);
-    vga_puts_at(clk, 80 - (int)kstrlen(clk) - 1, 0, VGA_WHITE, VGA_DARK_GREY);
-
-    /* row 0 is reserved for this bar; push the cursor below it if nothing
-       has been printed there yet (fresh boot / just after `clear`) */
-    if (vga_get_row() == 0 && vga_get_col() == 0) {
-        vga_goto(1, 0);
-    }
-}
-
 static void draw_splash(void) {
     vga_clear();
     vga_fill_rect(0,0,80,25,' ',VGA_BLACK,VGA_BLUE);
@@ -166,8 +118,6 @@ static void draw_splash(void) {
 }
 
 static void print_prompt(void) {
-    draw_statusbar();
-
     vga_color accent = kum_active ? VGA_LIGHT_RED : VGA_LIGHT_GREEN;
 
     vga_set_color(VGA_DARK_GREY,VGA_BLACK);
@@ -593,6 +543,16 @@ static void cmd_irqinfo(void) {
     vga_put_dec(timer_ticks()); vga_putchar('\n');
     vga_puts("  IRQ1: PS/2 keyboard  interrupt-driven  buffer=256B\n");
     vga_puts("  Sched: preemptive round-robin  quantum=10 ticks\n\n");
+
+    uint8_t pic_mask = inb(0x21);
+    uint8_t kb_stat  = inb(0x64);
+    vga_puts("  [kbd] PIC1 mask=");
+    vga_put_hex(pic_mask);
+    vga_puts("  IRQ1=");
+    vga_puts((pic_mask & 0x02) ? "MASKED(bad)" : "unmasked(ok)");
+    vga_puts("\n  8042 status=");
+    vga_put_hex(kb_stat);
+    vga_puts("  mode=hybrid(IRQ+poll)\n\n");
 }
 
 static void snake_game(void) {
@@ -601,7 +561,7 @@ static void snake_game(void) {
 #define SXO 20
 #define SYO 4
 #define SMAX 200
-    vga_clear(); draw_statusbar();
+    vga_clear();
     vga_fill_rect(SXO-1,SYO-1,SW+2,SH+2,' ',VGA_BLACK,VGA_DARK_GREY);
     vga_fill_rect(SXO,SYO,SW,SH,' ',VGA_BLACK,VGA_BLACK);
     vga_puts_at("SNAKE - WASD to move, Q to quit",24,1,VGA_YELLOW,VGA_BLACK);
@@ -1025,7 +985,7 @@ static void dispatch(const char *line) {
     split_cmd(line,cmd,rest,64);
 
     if(kstrcmp(cmd,"help")==0){ cmd_help(); }
-    else if(kstrcmp(cmd,"clear")==0){ vga_clear(); draw_statusbar(); }
+    else if(kstrcmp(cmd,"clear")==0){ vga_clear(); }
     else if(kstrcmp(cmd,"logo")==0){ cmd_logo(); }
     else if(kstrcmp(cmd,"uname")==0){ vga_puts("KumOS 1.4 kumos i686 KumOS/KumLabs\n"); }
     else if(kstrcmp(cmd,"whoami")==0) {
@@ -1309,7 +1269,6 @@ static void dispatch(const char *line) {
         gui_run();
 
         vga_clear();
-        draw_statusbar();
         vga_set_color(VGA_GREEN,VGA_BLACK);
         vga_puts("  Returned from GUI.\n\n");
         vga_set_color(VGA_WHITE,VGA_BLACK);
@@ -1434,7 +1393,7 @@ static void dispatch(const char *line) {
         vga_putchar('\n');
         p=rest; while(*p&&p-rest<8){vga_putchar(*p);vga_putchar(*p);vga_putchar(*p);vga_putchar(' ');p++;}
         vga_puts("\n"); vga_set_color(VGA_WHITE,VGA_BLACK); }
-    else if(kstrcmp(cmd,"snake")==0){ snake_game(); vga_clear(); draw_statusbar(); }
+    else if(kstrcmp(cmd,"snake")==0){ snake_game(); vga_clear(); }
     else if(kstrcmp(cmd,"motd")==0){
         fs_file_t *f=fs_find("motd.txt");
         if(f){vga_set_color(VGA_CYAN,VGA_BLACK);vga_puts(f->data);vga_set_color(VGA_WHITE,VGA_BLACK);} }
@@ -1597,32 +1556,16 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
     draw_splash();
     speaker_jingle();
     vga_clear();
-    draw_statusbar();
-    vga_goto(2, 0);
+    vga_goto(1, 0);
     draw_welcome_logo();
 
     vga_set_color(VGA_CYAN,VGA_BLACK);
     fs_file_t *motd = fs_find("motd.txt");
     if (motd) vga_puts(motd->data);
-    vga_set_color(VGA_LIGHT_GREY,VGA_BLACK);
-    kprintf("  KumOS v1.9  |  RAM: %u KB  |  VFS+Net+Signals+kush+ext2\n",total_mem_kb);
+    vga_set_color(VGA_DARK_GREY,VGA_BLACK);
+    kprintf("  v1.9  .  %u MB RAM  .  type 'help' to get started\n\n", total_mem_kb/1024);
     serial_printf("[boot] Shell started. Type commands below.\r\n");
     serial_printf("----------------------------------------\r\n");
-    vga_puts("  Type 'help' for commands. 'irqinfo' to see interrupt status.\n");
-    vga_puts("  Use 'kum <cmd>' instead of sudo for privileged ops.\n\n");
-
-    {
-        uint8_t pic_mask = inb(0x21);
-        uint8_t kb_stat  = inb(0x64);
-        vga_set_color(VGA_DARK_GREY, VGA_BLACK);
-        vga_puts("  [kbd] PIC1 mask=");
-        vga_put_hex(pic_mask);
-        vga_puts("  IRQ1=");
-        vga_puts((pic_mask & 0x02) ? "MASKED(bad)" : "unmasked(ok)");
-        vga_puts("\n  8042 status=");
-        vga_put_hex(kb_stat);
-        vga_puts("  mode=hybrid(IRQ+poll)\n\n");
-    }
     vga_set_color(VGA_WHITE,VGA_BLACK);
 
     char line[CMD_LEN];
