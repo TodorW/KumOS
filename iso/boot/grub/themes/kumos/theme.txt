@@ -1,79 +1,82 @@
-# KumOS GRUB theme
+# KumOS GRUB theme - Fedora-inspired: dark minimal background, left-aligned
+# boot list, blue accent, clean sans typography (Cantarell, GNOME/Fedora's
+# own UI font). Generous item_height/item_spacing so entries can never
+# visually overlap regardless of font metrics.
 
 title-text: ""
 desktop-image: "background.png"
-desktop-color: "#070b14"
+desktop-color: "#0a0c11"
 
 + vbox {
-    top = 30%
-    left = 12%
-    width = 76%
-    height = 65%
+    top = 12%
+    left = 9%
+    width = 60%
+    height = 80%
 
     + label {
-        text = "GNU GRUB"
+        text = "KumOS"
         font = "KumOS Title"
-        color = "#f4f6fb"
-        align = "center"
+        color = "#f5f7fa"
+        align = "left"
     }
 
-    + vbox { height = 6 }
+    + vbox { height = 8 }
 
     + label {
-        text = "KumOS bootloader"
+        text = "Choose an operating system to start"
         font = "KumOS Text"
-        color = "#7f90ac"
-        align = "center"
+        color = "#8b96a8"
+        align = "left"
     }
 
-    + vbox { height = 10 }
+    + vbox { height = 18 }
 
     + image {
         file = "accent_line.png"
-        width = 220
+        width = 300
         height = 2
-        align = "center"
+        align = "left"
     }
 
-    + vbox { height = 26 }
+    + vbox { height = 36 }
 
     + boot_menu {
-        left = 2%
-        width = 96%
-        height = 220
-        item_height = 30
-        item_padding = 10
-        item_spacing = 40
-        item_icon_space = 16
-        icon_width = 32
-        icon_height = 32
+        left = 0
+        width = 100%
+        height = 260
+        item_height = 46
+        item_padding = 12
+        item_spacing = 16
+        item_icon_space = 18
+        icon_width = 28
+        icon_height = 28
         icon_dir = "icons"
         item_font = "KumOS Menu"
         selected_item_font = "KumOS Menu"
-        item_color = "#c3cede"
+        item_color = "#aab4c4"
         selected_item_color = "#ffffff"
         selected_item_pixmap_style = "select_*.png"
     }
 
-    + vbox { height = 30 }
+    + vbox { height = 1 }
+}
 
-    + hbox {
-        + label {
-            text = "up/down  select"
-            font = "KumOS Text"
-            color = "#5b6c88"
-        }
-        + hbox { width = 40 }
-        + label {
-            text = "enter  boot"
-            font = "KumOS Text"
-            color = "#5b6c88"
-        }
-        + hbox { width = 40 }
-        + label {
-            text = "e  edit    c  command line"
-            font = "KumOS Text"
-            color = "#5b6c88"
-        }
-    }
++ label {
+    top = 90%
+    left = 9%
+    id = "__timeout__"
+    text = "Booting default in %d s"
+    font = "KumOS Text"
+    color = "#5b6c88"
+    align = "left"
+}
+
++ label {
+    top = 90%
+    left = 9%
+    width = 82%
+    text = "enter select    e edit    c command line"
+    font = "KumOS Text"
+    color = "#3f4a5c"
+    align = "right"
 }
