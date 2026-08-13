@@ -332,6 +332,25 @@ int keyboard_getline(char *out, int maxlen) {
             if (kbd_tab_complete(out, &len, &cur))
                 kbd_redraw(start_row, start_col, out, len, cur);
         }
+        /* Standard readline-ish shortcuts - process_scancode()/poll_once()
+           already turn Ctrl+letter into the real ASCII control code
+           (Ctrl+A=1 ... Ctrl+Z=26), these just weren't handled here, so
+           they silently no-op'd (all < 32, so the printable-char branch
+           below never took them either). */
+        else if (c == 1)  { cur = 0;   vga_goto(start_row, start_col); }              /* Ctrl+A: start of line */
+        else if (c == 5)  { cur = len; vga_goto(start_row, start_col+len); }          /* Ctrl+E: end of line */
+        else if (c == 21) { len = cur = 0; out[0] = 0;                                /* Ctrl+U: clear whole line */
+            kbd_redraw(start_row, start_col, out, len, cur); }
+        else if (c == 11) { out[cur] = 0; len = cur;                                  /* Ctrl+K: kill to end of line */
+            kbd_redraw(start_row, start_col, out, len, cur); }
+        else if (c == 23) {                                                           /* Ctrl+W: delete word before cursor */
+            int end = cur;
+            while (cur > 0 && out[cur-1] == ' ') cur--;
+            while (cur > 0 && out[cur-1] != ' ') cur--;
+            for (int i = cur; i + (end-cur) < len; i++) out[i] = out[i + (end-cur)];
+            len -= (end - cur); out[len] = 0;
+            kbd_redraw(start_row, start_col, out, len, cur);
+        }
         else if (len < maxlen-1 && c >= 32 && (uint8_t)c < 127) {
             for (int i=len;i>cur;i--) out[i]=out[i-1];
             out[cur]=c; len++; cur++; out[len]=0;
