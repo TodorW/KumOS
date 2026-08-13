@@ -426,6 +426,60 @@ static int do_sed(char *argv[], int argc) {
     return 0;
 }
 
+/* Line-by-line diff, classic "< a-line" / "> b-line" format for lines
+   that differ at the same line number, plus a trailer if one file has
+   extra lines the other doesn't. No real line-matching/hunk algorithm
+   (that's a much bigger feature) - just a positional compare, which is
+   still genuinely useful for "did this file change" style checks.
+   Returns 0 if identical, 1 if different - same convention as real
+   diff, so `if diff a b` works in scripts. */
+static int do_diff(char *argv[], int argc) {
+    if (argc < 3) { fputs("diff: diff <file1> <file2>\n"); return 2; }
+
+    int fd1 = open(argv[1]);
+    if (fd1 < 0) { printf("diff: %s: not found\n", argv[1]); return 2; }
+    static char buf1[8192]; int n1=0,r;
+    while (n1<(int)sizeof(buf1)-1 && (r=fread(fd1,buf1+n1,(uint32_t)(sizeof(buf1)-n1-1)))>0) n1+=r;
+    buf1[n1]=0; close(fd1);
+
+    int fd2 = open(argv[2]);
+    if (fd2 < 0) { printf("diff: %s: not found\n", argv[2]); return 2; }
+    static char buf2[8192]; int n2=0;
+    while (n2<(int)sizeof(buf2)-1 && (r=fread(fd2,buf2+n2,(uint32_t)(sizeof(buf2)-n2-1)))>0) n2+=r;
+    buf2[n2]=0; close(fd2);
+
+    char *end1 = buf1+n1, *end2 = buf2+n2;
+    char *p1=buf1, *p2=buf2;
+    int lineno = 0, differed = 0;
+    while (p1 < end1 || p2 < end2) {
+        lineno++;
+        char *line1 = 0, *line2 = 0;
+        if (p1 < end1) {
+            line1 = p1;
+            char *nl = strchr(p1,'\n');
+            if (nl && nl < end1) { *nl=0; p1 = nl+1; } else p1 = end1;
+        }
+        if (p2 < end2) {
+            line2 = p2;
+            char *nl = strchr(p2,'\n');
+            if (nl && nl < end2) { *nl=0; p2 = nl+1; } else p2 = end2;
+        }
+        if (line1 && line2) {
+            if (strcmp(line1,line2) != 0) {
+                differed = 1;
+                printf("%d,%dc%d,%d\n< %s\n---\n> %s\n", lineno, lineno, lineno, lineno, line1, line2);
+            }
+        } else if (line1) {
+            differed = 1;
+            printf("%dd\n< %s\n", lineno, line1);
+        } else if (line2) {
+            differed = 1;
+            printf("%da\n> %s\n", lineno, line2);
+        }
+    }
+    return differed;
+}
+
 static int do_write(char *argv[], int argc) {
     if (argc<3){fputs("write: write <file> <content>\n");return 1;}
 
@@ -492,6 +546,7 @@ static int do_help(char *argv[], int argc) {
     fputs("    find [dir] <name> - Search filenames (non-recursive)\n");
     fputs("    du [path]         - Disk usage\n");
     fputs("    sed s/old/new/[g] [f] - Stream substitution\n");
+    fputs("    diff <f1> <f2>    - Line-by-line compare\n");
     fputs("    date              - Current date/time\n");
     fputs("    history           - Command history\n");
     fputs("    !!  !N            - Repeat last / Nth history entry\n");
@@ -582,6 +637,7 @@ static int dispatch_one(char *argv[], int argc) {
     if (!strcmp(cmd,"find"))    return do_find(argv,argc);
     if (!strcmp(cmd,"du"))      return do_du(argv,argc);
     if (!strcmp(cmd,"sed"))     return do_sed(argv,argc);
+    if (!strcmp(cmd,"diff"))    return do_diff(argv,argc);
     if (!strcmp(cmd,"echo"))    return do_echo(argv,argc);
     if (!strcmp(cmd,"date"))    return do_date(argv,argc);
     if (!strcmp(cmd,"history")) return do_history(argv,argc);
