@@ -8,10 +8,10 @@ desktop-image: "background.png"
 desktop-color: "#0a0c11"
 
 + vbox {
-    top = 12%
+    top = 30%
     left = 9%
     width = 60%
-    height = 80%
+    height = 40%
 
     + label {
         text = "KumOS"
@@ -43,7 +43,7 @@ desktop-color: "#0a0c11"
     + boot_menu {
         left = 0
         width = 100%
-        height = 260
+        height = 180
         item_height = 46
         item_padding = 12
         item_spacing = 16
