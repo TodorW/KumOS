@@ -896,7 +896,20 @@ static int run_pipeline(char *line) {
         char *argv[ARG_MAX]; int argc = split(parts[i], argv, ARG_MAX);
         if (!argc) { if (prev_read >= 0) close(prev_read); return 0; }
 
-        int is_last = (i == nparts - 1);
+        int is_first = (i == 0);
+        int is_last  = (i == nparts - 1);
+
+        /* `< infile | ...` on the first stage, `... | cmd > outfile` on
+           the last - was only ever handled for a lone (non-piped)
+           command, so e.g. `cat file | grep x > out.txt` silently passed
+           ">" and "out.txt" as literal arguments to grep instead of
+           redirecting. Mid-pipeline redirects on stages in between don't
+           make much sense (their fds are already wired to the pipe) so
+           those aren't parsed for redirect tokens at all. */
+        char *out_file = 0, *in_file = 0; int append = 0;
+        if (is_first || is_last) parse_redir(argv, &argc, &out_file, &append, &in_file);
+        if (!argc) { if (prev_read >= 0) close(prev_read); return 0; }
+
         int pipefd[2] = {-1, -1};
         if (!is_last && sys_pipe(pipefd) < 0) {
             fputs("pipe failed\n");
@@ -904,15 +917,29 @@ static int run_pipeline(char *line) {
             return 1;
         }
         int saved_stdin = -1, saved_stdout = -1;
+        int redir_out_fd = -1, redir_in_fd = -1;
+
         if (prev_read >= 0) {
             saved_stdin = sys_dup2(0, 11);
             sys_dup2(prev_read, 0);
             close(prev_read);
+        } else if (in_file) {
+            redir_in_fd = open(in_file);
+            if (redir_in_fd < 0) { printf("kush: %s: not found\n", in_file); return 1; }
+            saved_stdin = sys_dup2(0, 13);
+            sys_dup2(redir_in_fd, 0);
         }
+
         if (!is_last) {
             saved_stdout = sys_dup2(1, 10);
             sys_dup2(pipefd[1], 1);
             close(pipefd[1]);
+        } else if (out_file) {
+            char path[128] = "/disk/"; strcat(path, out_file);
+            redir_out_fd = _syscall(SYS_OPEN, (int)path, O_WRONLY|O_CREAT|(append?O_APPEND:O_TRUNC), 0);
+            if (redir_out_fd < 0) { printf("kush: can't open %s\n", out_file); return 1; }
+            saved_stdout = sys_dup2(1, 12);
+            sys_dup2(redir_out_fd, 1);
         }
 
         /* Routes through dispatch_one itself (not a hand-copied builtin
@@ -921,6 +948,8 @@ static int run_pipeline(char *line) {
 
         if (saved_stdout >= 0) { sys_dup2(saved_stdout, 1); close(saved_stdout); }
         if (saved_stdin  >= 0) { sys_dup2(saved_stdin,  0); close(saved_stdin);  }
+        if (redir_out_fd >= 0) close(redir_out_fd);
+        if (redir_in_fd  >= 0) close(redir_in_fd);
 
         prev_read = is_last ? -1 : pipefd[0];
     }
