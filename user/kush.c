@@ -1,29 +1,45 @@
 
 #include "kumos_libc.h"
 
+/* All of these need a "memory" clobber - without it, GCC doesn't know the
+   int 0x80 call writes through a pointer argument (fds/buf/st) and is free
+   to keep a stale cached copy of anything it thinks it already knows the
+   value of, instead of reloading from memory afterward. kumos_libc.h's own
+   _syscall() already has this; these were hand-duplicated here without it.
+   Real, reproducible bug: sys_pipe() on a freshly-declared, compiler-known
+   {-1,-1} array let GCC skip the reload and pass -1 to the very next
+   sys_dup2() call, silently no-opping the pipe redirect (output leaked
+   straight to the console instead of into the pipe) - only surfaced once
+   run_pipeline()'s pipe-stage loop put pipefd[] in a shape (freshly
+   re-declared each iteration) the optimizer could exploit; the single,
+   outer-scope pipefd[] the old 2-stage-only code used happened not to
+   trigger it. */
 static inline int sys_pipe(int fds[2]) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(21),"b"(fds)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(21),"b"(fds):"memory"); return r;
 }
 static inline int sys_dup2(int old, int nw) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(22),"b"(old),"c"(nw)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(22),"b"(old),"c"(nw):"memory"); return r;
 }
 static inline int sys_getcwd(char *buf, uint32_t sz) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(23),"b"(buf),"c"(sz)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(23),"b"(buf),"c"(sz):"memory"); return r;
 }
 static inline int sys_chdir(const char *path) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(24),"b"(path)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(24),"b"(path):"memory"); return r;
 }
 static inline int sys_stat(const char *path, void *st) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(25),"b"(path),"c"(st)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(25),"b"(path),"c"(st):"memory"); return r;
 }
 static inline int sys_unlink(const char *path) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(26),"b"(path)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(26),"b"(path):"memory"); return r;
+}
+static inline int sys_chmod(const char *path, const char *mode) {
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(27),"b"(path),"c"(mode):"memory"); return r;
 }
 static inline int sys_isatty(int fd) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(29),"b"(fd)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(29),"b"(fd):"memory"); return r;
 }
 static inline int sys_listdir(const char *path, char *buf, uint32_t sz) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(14),"b"(path),"c"(buf),"d"(sz)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(14),"b"(path),"c"(buf),"d"(sz):"memory"); return r;
 }
 
 typedef struct { uint32_t size; uint8_t type; char name[64]; } stat_t;
