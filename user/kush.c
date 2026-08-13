@@ -811,6 +811,7 @@ static int run_pipeline(char *line) {
        silently dropping anything past the second '|' - now loops over
        however many stages split() found (up to 8). */
     int prev_read = -1;
+    int last_ret = 0;
     for (int i = 0; i < nparts; i++) {
         char *argv[ARG_MAX]; int argc = split(parts[i], argv, ARG_MAX);
         if (!argc) { if (prev_read >= 0) close(prev_read); return 0; }
@@ -836,15 +837,17 @@ static int run_pipeline(char *line) {
 
         /* Routes through dispatch_one itself (not a hand-copied builtin
            subset) so every builtin works as a pipe stage automatically. */
-        int ret = dispatch_one(argv, argc);
-        (void)ret;
+        last_ret = dispatch_one(argv, argc);
 
         if (saved_stdout >= 0) { sys_dup2(saved_stdout, 1); close(saved_stdout); }
         if (saved_stdin  >= 0) { sys_dup2(saved_stdin,  0); close(saved_stdin);  }
 
         prev_read = is_last ? -1 : pipefd[0];
     }
-    return 0;
+    /* Real pipeline exit status: the last stage's, not always 0 - so
+       `if a | b` (used heavily by scripts, e.g. `if cmd | grep pat`)
+       actually reflects whether the pipeline succeeded. */
+    return last_ret;
 }
 
 static void print_prompt(void) {
