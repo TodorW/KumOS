@@ -8,17 +8,21 @@ static int terminal_row;
 static int terminal_col;
 static uint8_t terminal_color;
 
-/* Minimal ANSI/VT100 CSI parser: colors (SGR), cursor positioning,
-   clear screen/line. Just enough for real terminal output (kush's own
-   prompt already emits \033[32m-style codes that used to render as
-   literal garbage since nothing ever interpreted them). */
+/* ANSI/VT100 CSI/OSC parser: colors (SGR incl. reverse video), cursor
+   positioning/save-restore/show-hide, real erase-mode handling for J/K,
+   scroll up/down, and private-mode (CSI ?) + OSC sequences consumed
+   without leaking their bytes onscreen as garbage text. */
 #define ANSI_MAX_PARAMS 8
-static int     ansi_esc_state = 0;   /* 0=normal, 1=saw ESC, 2=in CSI */
+static int     ansi_esc_state = 0;   /* 0=normal,1=saw ESC,2=in CSI,3=in OSC,4=OSC ST-pending */
 static int     ansi_params[ANSI_MAX_PARAMS];
 static int     ansi_nparams = 0;
+static int     ansi_private = 0;     /* CSI ? ... seen */
 static uint8_t ansi_fg = VGA_LIGHT_GREY;
 static uint8_t ansi_bg = VGA_BLACK;
 static int     ansi_bold = 0;
+static int     ansi_reverse = 0;
+static int     ansi_saved_row = 0;
+static int     ansi_saved_col = 0;
 
 static const uint8_t ansi_color_map[8] = {
     VGA_BLACK, VGA_RED, VGA_GREEN, VGA_BROWN,
@@ -31,15 +35,20 @@ static const uint8_t ansi_bright_color_map[8] = {
 
 static void ansi_apply_sgr(void) {
     if (ansi_nparams == 0 || (ansi_nparams == 1 && ansi_params[0] == 0)) {
-        ansi_fg = VGA_LIGHT_GREY; ansi_bg = VGA_BLACK; ansi_bold = 0;
+        ansi_fg = VGA_LIGHT_GREY; ansi_bg = VGA_BLACK; ansi_bold = 0; ansi_reverse = 0;
         vga_set_color((vga_color)ansi_fg, (vga_color)ansi_bg);
         return;
     }
     for (int i = 0; i < ansi_nparams; i++) {
         int p = ansi_params[i];
-        if (p == 0) { ansi_fg = VGA_LIGHT_GREY; ansi_bg = VGA_BLACK; ansi_bold = 0; }
+        if (p == 0) { ansi_fg = VGA_LIGHT_GREY; ansi_bg = VGA_BLACK; ansi_bold = 0; ansi_reverse = 0; }
         else if (p == 1) ansi_bold = 1;
         else if (p == 22) ansi_bold = 0;
+        else if (p == 7) ansi_reverse = 1;
+        else if (p == 27) ansi_reverse = 0;
+        /* 2=dim, 3=italic, 4=underline, 9=strikethrough: recognized and
+           consumed but VGA text-mode colour cells have no way to render
+           them, so they're intentionally no-ops rather than left unhandled. */
         else if (p >= 30 && p <= 37) ansi_fg = ansi_bold ? ansi_bright_color_map[p-30] : ansi_color_map[p-30];
         else if (p == 39) ansi_fg = VGA_LIGHT_GREY;
         else if (p >= 40 && p <= 47) ansi_bg = ansi_color_map[p-40];
@@ -47,7 +56,8 @@ static void ansi_apply_sgr(void) {
         else if (p >= 90 && p <= 97) ansi_fg = ansi_bright_color_map[p-90];
         else if (p >= 100 && p <= 107) ansi_bg = ansi_bright_color_map[p-100];
     }
-    vga_set_color((vga_color)ansi_fg, (vga_color)ansi_bg);
+    if (ansi_reverse) vga_set_color((vga_color)ansi_bg, (vga_color)ansi_fg);
+    else vga_set_color((vga_color)ansi_fg, (vga_color)ansi_bg);
 }
 
 static uint16_t vga_entry(char c, uint8_t color) {
@@ -68,6 +78,35 @@ void vga_set_cursor(int x, int y) {
     outb(0x3D5, (uint8_t)(pos & 0xFF));
     outb(0x3D4, 0x0E);
     outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
+
+static void vga_cursor_show(int show) {
+    outb(0x3D4, 0x0A);
+    outb(0x3D5, show ? 0x0E : 0x20); /* bit5 = cursor disable */
+}
+
+/* Inclusive cell range fill, used by CSI J/K erase modes. */
+static void vga_erase_range(int r1, int c1, int r2, int c2) {
+    int start = r1 * VGA_WIDTH + c1;
+    int end   = r2 * VGA_WIDTH + c2;
+    for (int i = start; i <= end; i++)
+        VGA_MEM[i] = vga_entry(' ', terminal_color);
+}
+
+static void vga_scroll_up_lines(void) {
+    for (int y = 0; y < VGA_HEIGHT - 1; y++)
+        for (int x = 0; x < VGA_WIDTH; x++)
+            VGA_MEM[y * VGA_WIDTH + x] = VGA_MEM[(y+1) * VGA_WIDTH + x];
+    for (int x = 0; x < VGA_WIDTH; x++)
+        VGA_MEM[(VGA_HEIGHT-1) * VGA_WIDTH + x] = vga_entry(' ', terminal_color);
+}
+
+static void vga_scroll_down_lines(void) {
+    for (int y = VGA_HEIGHT - 1; y > 0; y--)
+        for (int x = 0; x < VGA_WIDTH; x++)
+            VGA_MEM[y * VGA_WIDTH + x] = VGA_MEM[(y-1) * VGA_WIDTH + x];
+    for (int x = 0; x < VGA_WIDTH; x++)
+        VGA_MEM[x] = vga_entry(' ', terminal_color);
 }
 
 void vga_init(void) {
@@ -91,21 +130,27 @@ void vga_set_color(vga_color fg, vga_color bg) {
 }
 
 void vga_scroll(void) {
-    for (int y = 0; y < VGA_HEIGHT - 1; y++)
-        for (int x = 0; x < VGA_WIDTH; x++)
-            VGA_MEM[y * VGA_WIDTH + x] = VGA_MEM[(y+1) * VGA_WIDTH + x];
-    for (int x = 0; x < VGA_WIDTH; x++)
-        VGA_MEM[(VGA_HEIGHT-1) * VGA_WIDTH + x] = vga_entry(' ', terminal_color);
+    vga_scroll_up_lines();
     terminal_row = VGA_HEIGHT - 1;
 }
 
 void vga_putchar(char c) {
     if (ansi_esc_state == 1) {
-        if (c == '[') { ansi_esc_state = 2; ansi_nparams = 0; ansi_params[0] = 0; }
+        if (c == '[') { ansi_esc_state = 2; ansi_nparams = 0; ansi_params[0] = 0; ansi_private = 0; }
+        else if (c == ']') { ansi_esc_state = 3; }               /* OSC ... swallow */
+        else if (c == '7') { ansi_saved_row = terminal_row; ansi_saved_col = terminal_col; ansi_esc_state = 0; }
+        else if (c == '8') { vga_goto(ansi_saved_row, ansi_saved_col); ansi_esc_state = 0; }
         else ansi_esc_state = 0;
         return;
     }
+    if (ansi_esc_state == 3) {                                    /* inside OSC, swallow to BEL or ESC \ */
+        if ((uint8_t)c == 7) ansi_esc_state = 0;
+        else if ((uint8_t)c == 27) ansi_esc_state = 4;
+        return;
+    }
+    if (ansi_esc_state == 4) { ansi_esc_state = 0; return; }       /* the '\' terminating an ST */
     if (ansi_esc_state == 2) {
+        if (c == '?') { ansi_private = 1; return; }
         if (c >= '0' && c <= '9') {
             if (ansi_nparams == 0) { ansi_nparams = 1; ansi_params[0] = 0; }
             ansi_params[ansi_nparams-1] = ansi_params[ansi_nparams-1]*10 + (c-'0');
@@ -123,20 +168,37 @@ void vga_putchar(char c) {
                     vga_goto(row-1, col-1);
                     break;
                 }
-                case 'J':
-                    vga_clear();
+                case 'J': {
+                    int mode = ansi_params[0];
+                    if (mode == 1) vga_erase_range(0, 0, terminal_row, terminal_col);
+                    else if (mode == 2 || mode == 3) vga_erase_range(0, 0, VGA_HEIGHT-1, VGA_WIDTH-1);
+                    else vga_erase_range(terminal_row, terminal_col, VGA_HEIGHT-1, VGA_WIDTH-1);
                     break;
-                case 'K':
-                    vga_fill_rect(terminal_col, terminal_row, VGA_WIDTH-terminal_col, 1,
-                                  ' ', (vga_color)ansi_fg, (vga_color)ansi_bg);
+                }
+                case 'K': {
+                    int mode = ansi_params[0];
+                    if (mode == 1) vga_erase_range(terminal_row, 0, terminal_row, terminal_col);
+                    else if (mode == 2) vga_erase_range(terminal_row, 0, terminal_row, VGA_WIDTH-1);
+                    else vga_erase_range(terminal_row, terminal_col, terminal_row, VGA_WIDTH-1);
                     break;
+                }
                 case 'A': { int n=ansi_params[0]?ansi_params[0]:1; int r=terminal_row-n; if(r<0)r=0; vga_goto(r, terminal_col); break; }
                 case 'B': { int n=ansi_params[0]?ansi_params[0]:1; int r=terminal_row+n; if(r>=VGA_HEIGHT)r=VGA_HEIGHT-1; vga_goto(r, terminal_col); break; }
                 case 'C': { int n=ansi_params[0]?ansi_params[0]:1; int cc=terminal_col+n; if(cc>=VGA_WIDTH)cc=VGA_WIDTH-1; vga_goto(terminal_row, cc); break; }
                 case 'D': { int n=ansi_params[0]?ansi_params[0]:1; int cc=terminal_col-n; if(cc<0)cc=0; vga_goto(terminal_row, cc); break; }
-                default: break;
+                case 'E': { int n=ansi_params[0]?ansi_params[0]:1; int r=terminal_row+n; if(r>=VGA_HEIGHT)r=VGA_HEIGHT-1; vga_goto(r, 0); break; }
+                case 'F': { int n=ansi_params[0]?ansi_params[0]:1; int r=terminal_row-n; if(r<0)r=0; vga_goto(r, 0); break; }
+                case 'G': { int col=ansi_params[0]?ansi_params[0]-1:0; if(col<0)col=0; if(col>=VGA_WIDTH)col=VGA_WIDTH-1; vga_goto(terminal_row, col); break; }
+                case 'S': { int n=ansi_params[0]?ansi_params[0]:1; for(int i=0;i<n;i++) vga_scroll_up_lines(); break; }
+                case 'T': { int n=ansi_params[0]?ansi_params[0]:1; for(int i=0;i<n;i++) vga_scroll_down_lines(); break; }
+                case 's': ansi_saved_row = terminal_row; ansi_saved_col = terminal_col; break;
+                case 'u': vga_goto(ansi_saved_row, ansi_saved_col); break;
+                case 'h': if (ansi_private && ansi_params[0] == 25) vga_cursor_show(1); break;
+                case 'l': if (ansi_private && ansi_params[0] == 25) vga_cursor_show(0); break;
+                default: break; /* unrecognized final byte: consumed, not printed - no garbage leak */
             }
             ansi_esc_state = 0;
+            ansi_private = 0;
         }
         return;
     }
