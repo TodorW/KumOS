@@ -366,6 +366,7 @@ static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_
     for(int j=0;j<8;j++) *--ksp = 0;
     *--ksp = 0x23;
     *--ksp = (uint32_t)(uintptr_t)user_entry_trampoline;
+    *--ksp = 0x202; /* eflags for switch_context's popfd, IF=1 */
     *--ksp = 0; *--ksp = 0; *--ksp = 0; *--ksp = 0;
 
     cur->esp = (uint32_t)(uintptr_t)ksp;
@@ -384,7 +385,6 @@ static uint32_t sc_fork(uint32_t a, uint32_t b, uint32_t c) {
     (void)a;(void)b;(void)c;
     task_t *parent = sched_current();
     syscall_regs_t *pr = g_cur_regs;
-
     uint32_t child_dir = paging_clone_dir();
     if (!child_dir) return (uint32_t)-1;
 
@@ -439,6 +439,7 @@ static uint32_t sc_fork(uint32_t a, uint32_t b, uint32_t c) {
     *--sp = pr->edi;
     *--sp = pr->ds;
     *--sp = (uint32_t)(uintptr_t)user_entry_trampoline;
+    *--sp = 0x202; /* eflags for switch_context's popfd, IF=1 */
     *--sp = 0; *--sp = 0; *--sp = 0; *--sp = 0;
     child->esp = (uint32_t)(uintptr_t)sp;
 

@@ -175,6 +175,7 @@ int elf_spawn(const char *name, elf_load_result_t *res) {
 
     *--sp = (uint32_t)user_entry_trampoline;
 
+    *--sp = 0x202; /* eflags for switch_context's popfd, IF=1 */
     *--sp = 0;
     *--sp = 0;
     *--sp = 0;
