@@ -507,9 +507,10 @@ static int do_help(char *argv[], int argc) {
     fputs("    SYSINFO.ELF       - System info\n\n");
     fputs("  Pipes:  cmd1 | cmd2 | cmd3 (any number of stages)\n\n");
     fputs("  Scripts (source <file> or . <file>), one keyword per own line:\n");
-    fputs("    if <cmd> / then / ... / else / ... / fi\n");
+    fputs("    if <cmd> / then / ... / elif <cmd> / ... / else / ... / fi\n");
     fputs("    for VAR in a b c / do / ... / done\n");
-    fputs("    while <cmd> / do / ... / done\n\n");
+    fputs("    while <cmd> / do / ... / done\n");
+    fputs("    break / continue  (inside for/while)\n\n");
     return 0;
 }
 
@@ -865,13 +866,24 @@ static void motd(void) {
     printf("\n  kush v%s - KumOS Shell  (type 'help')\n\n", KUSH_VER);
 }
 
-/* Real control flow for scripts: if/then/else/fi, for VAR in .../do/done,
-   while <cmd>/do/done. Deliberately scoped down from real shell syntax -
-   each keyword needs its own line (no "if cond; then" on one line) - to
-   keep the block matcher a simple depth counter instead of a real
-   tokenizer. Nesting works (any mix of if/for/while), nothing else does:
-   no elif, no break/continue, no arithmetic, no functions. */
+/* Real control flow for scripts: if/elif/then/else/fi, for VAR in .../do/
+   done, while <cmd>/do/done, break/continue. Deliberately scoped down
+   from real shell syntax - each keyword needs its own line (no "if cond;
+   then" on one line) - to keep the block matcher a simple depth counter
+   instead of a real tokenizer. Nesting works (any mix of if/for/while).
+   Still no arithmetic, no functions. */
 #define SCRIPT_MAX_LINES 200
+
+/* break/continue can't just `return` out of the loop's own C for/while -
+   they're hit inside script_exec_block(), which may be several levels of
+   *nested* recursive calls deep (e.g. break inside an if inside a while).
+   These flags let a break/continue unwind back up through every enclosing
+   non-loop block (checked at the top of script_exec_block's own loop) and
+   get caught by the nearest actual while/for, same idea as a real
+   language's loop-unwind, just done by hand with two static flags instead
+   of a real exception mechanism. */
+static int loop_break    = 0;
+static int loop_continue = 0;
 
 static int is_block_open(const char *l) {
     return !strncmp(l,"if ",3) || !strcmp(l,"if") || !strncmp(l,"for ",4) || !strncmp(l,"while ",6);
@@ -894,15 +906,16 @@ static void skip_block(char *lines[], int n, int *idx) {
     }
 }
 
-/* Same, but also stops early on a same-depth "else" (for skipping an
-   if-branch that wasn't taken, which needs to land on either). */
+/* Same, but also stops early on a same-depth "else"/"elif" (for skipping
+   an if/elif-branch that wasn't taken, which needs to land on whichever
+   of else/elif/fi comes next so the if-handler can decide what to do). */
 static void skip_to_else_or_close(char *lines[], int n, int *idx) {
     int depth = 1;
     while (*idx < n) {
         char *l = lines[*idx];
         if (is_block_open(l)) { depth++; (*idx)++; continue; }
         if (is_block_close(l)) { depth--; if (!depth) return; (*idx)++; continue; }
-        if (depth==1 && !strcmp(l,"else")) return;
+        if (depth==1 && (!strcmp(l,"else") || !strncmp(l,"elif ",5))) return;
         (*idx)++;
     }
 }
@@ -910,8 +923,14 @@ static void skip_to_else_or_close(char *lines[], int n, int *idx) {
 static int script_exec_block(char *lines[], int n, int *idx) {
     int ret = 0;
     while (*idx < n) {
+        if (loop_break || loop_continue) return ret;
+
         char *line = lines[*idx];
-        if (!strcmp(line,"fi") || !strcmp(line,"done") || !strcmp(line,"else")) return ret;
+        if (!strcmp(line,"fi") || !strcmp(line,"done") || !strcmp(line,"else") || !strncmp(line,"elif ",5))
+            return ret;
+
+        if (!strcmp(line,"break"))    { loop_break = 1;    (*idx)++; return ret; }
+        if (!strcmp(line,"continue")) { loop_continue = 1; (*idx)++; return ret; }
 
         if (!strncmp(line,"if ",3) || !strcmp(line,"if")) {
             char cond[CMD_MAX]; strncpy(cond, line+2, CMD_MAX-1); cond[CMD_MAX-1]=0;
@@ -919,13 +938,24 @@ static int script_exec_block(char *lines[], int n, int *idx) {
             (*idx)++;
             if (*idx<n && !strcmp(lines[*idx],"then")) (*idx)++;
 
+            int matched = 0;
             int cret = run_pipeline(c);
-            if (cret == 0) ret = script_exec_block(lines, n, idx);
+            if (cret == 0) { matched = 1; ret = script_exec_block(lines, n, idx); }
             else            skip_to_else_or_close(lines, n, idx);
+
+            /* any number of elif clauses, first matching one wins */
+            while (!matched && *idx<n && !strncmp(lines[*idx],"elif ",5)) {
+                char econd[CMD_MAX]; strncpy(econd, lines[*idx]+5, CMD_MAX-1); econd[CMD_MAX-1]=0;
+                (*idx)++;
+                if (*idx<n && !strcmp(lines[*idx],"then")) (*idx)++;
+                int eret = run_pipeline(econd);
+                if (eret == 0) { matched = 1; ret = script_exec_block(lines, n, idx); }
+                else            skip_to_else_or_close(lines, n, idx);
+            }
 
             if (*idx<n && !strcmp(lines[*idx],"else")) {
                 (*idx)++;
-                if (cret != 0) ret = script_exec_block(lines, n, idx);
+                if (!matched) { matched = 1; ret = script_exec_block(lines, n, idx); }
                 else           skip_block(lines, n, idx);
             }
             if (*idx<n && !strcmp(lines[*idx],"fi")) (*idx)++;
@@ -943,6 +973,8 @@ static int script_exec_block(char *lines[], int n, int *idx) {
                 int bi = body_start;
                 ret = script_exec_block(lines, n, &bi);
                 guard++;
+                loop_continue = 0;
+                if (loop_break) { loop_break = 0; break; }
             }
             *idx = body_start;
             skip_block(lines, n, idx);
@@ -964,6 +996,8 @@ static int script_exec_block(char *lines[], int n, int *idx) {
                     var_set(fargv[0], (int)strlen(fargv[0]), fargv[k]);
                     int bi = body_start;
                     ret = script_exec_block(lines, n, &bi);
+                    loop_continue = 0;
+                    if (loop_break) { loop_break = 0; break; }
                 }
             }
             *idx = body_start;
