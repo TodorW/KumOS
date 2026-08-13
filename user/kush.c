@@ -312,6 +312,116 @@ static int do_stat(char *argv[], int argc) {
     return 0;
 }
 
+/* Toggles the real on-disk FAT12 read-only attribute bit (src/fat12.c),
+   not a fabricated permission model - the only per-file access control
+   this filesystem format actually has, and only /disk has it (no on-disk
+   representation on /mem or /dev to attach a bit to). */
+static int do_chmod(char *argv[], int argc) {
+    if (argc < 3) { fputs("chmod: chmod <mode> <file>\n"); return 1; }
+    if (sys_chmod(argv[2], argv[1]) == 0) { printf("chmod: %s: %s\n", argv[2], argv[1]); return 0; }
+    printf("chmod: %s: failed (only /disk files have a real read-only bit)\n", argv[2]);
+    return 1;
+}
+
+/* Non-recursive filename search (ls itself is non-recursive too - there's
+   no directory-tree-walk API in the vfs layer yet to build a real
+   recursive find on top of). */
+static int do_find(char *argv[], int argc) {
+    if (argc < 2) { fputs("find: find [dir] <name>\n"); return 1; }
+    const char *pat  = argv[argc-1];
+    const char *path = argc>2 ? argv[1] : cwd_buf;
+
+    char buf[2048];
+    int n = sys_listdir(path, buf, sizeof(buf));
+    if (n <= 0) return 0;
+    buf[n] = 0;
+
+    char *p = buf; int found = 0;
+    while (*p) {
+        char *nl = strchr(p,'\n');
+        if (nl) *nl = 0;
+        if (strstr(p, pat)) { printf("%s/%s\n", path, p); found = 1; }
+        p = nl ? nl+1 : p+strlen(p);
+    }
+    if (!found) printf("find: no matches for '%s' in %s\n", pat, path);
+    return 0;
+}
+
+static int do_du(char *argv[], int argc) {
+    const char *path = argc>1 ? argv[1] : cwd_buf;
+
+    stat_t st;
+    if (sys_stat(path, &st) == 0 && st.type != 2) {
+        printf("%6u  %s\n", st.size, path);
+        return 0;
+    }
+
+    char buf[2048];
+    int n = sys_listdir(path, buf, sizeof(buf));
+    if (n <= 0) { printf("du: %s: not found\n", path); return 1; }
+    buf[n] = 0;
+
+    char *p = buf; uint32_t total = 0;
+    while (*p) {
+        char *nl = strchr(p,'\n');
+        if (nl) *nl = 0;
+        char full[192]; strcpy(full, path);
+        if (full[strlen(full)-1] != '/') strcat(full, "/");
+        strcat(full, p);
+        stat_t est;
+        if (sys_stat(full, &est) == 0) { printf("%6u  %s\n", est.size, full); total += est.size; }
+        p = nl ? nl+1 : p+strlen(p);
+    }
+    printf("%6u  total\n", total);
+    return 0;
+}
+
+/* Basic sed s/old/new/ [g] substitution - one expression, one file (or
+   stdin), no full regex, no other sed commands. */
+static int do_sed(char *argv[], int argc) {
+    if (argc < 2 || argv[1][0] != 's' || argv[1][1] != '/') { fputs("sed: sed s/old/new/[g] [file]\n"); return 1; }
+
+    char expr[192]; strncpy(expr, argv[1]+2, sizeof(expr)-1); expr[sizeof(expr)-1]=0;
+    char *old = expr;
+    char *sep2 = strchr(old, '/');
+    if (!sep2) { fputs("sed: bad expression, need s/old/new/\n"); return 1; }
+    *sep2 = 0;
+    char *new_ = sep2+1;
+    char *sep3 = strchr(new_, '/');
+    int global = 0;
+    if (sep3) { global = (sep3[1]=='g'); *sep3 = 0; }
+    int oldlen = (int)strlen(old);
+
+    int fd = 0;
+    if (argc > 2) { fd = open(argv[2]); if (fd<0) { printf("sed: %s: not found\n", argv[2]); return 1; } }
+    static char buf[8192]; int total=0; int r;
+    while (total<(int)sizeof(buf)-1 && (r=fread(fd,buf+total,(uint32_t)(sizeof(buf)-total-1)))>0) total+=r;
+    buf[total]=0;
+    if (fd) close(fd);
+
+    char *p = buf;
+    while (*p) {
+        char *nl = strchr(p,'\n');
+        if (nl) *nl = 0;
+
+        char outline[512]; int oi=0; int replaced=0;
+        char *q = p;
+        while (*q && oi < (int)sizeof(outline)-1) {
+            if ((!replaced || global) && oldlen>0 && strncmp(q, old, (uint32_t)oldlen)==0) {
+                for (const char *rp=new_; *rp && oi<(int)sizeof(outline)-1; rp++) outline[oi++]=*rp;
+                q += oldlen;
+                replaced = 1;
+            } else {
+                outline[oi++] = *q++;
+            }
+        }
+        outline[oi] = 0;
+        fputs(outline); putchar('\n');
+        p = nl ? nl+1 : p+strlen(p);
+    }
+    return 0;
+}
+
 static int do_write(char *argv[], int argc) {
     if (argc<3){fputs("write: write <file> <content>\n");return 1;}
 
@@ -374,6 +484,10 @@ static int do_help(char *argv[], int argc) {
     fputs("    cd [path]         - Change directory\n");
     fputs("    pwd               - Print working directory\n");
     fputs("    stat <file>       - File info\n");
+    fputs("    chmod <mode> <f>  - Toggle real FAT12 read-only bit (+w/-w or e.g 644/444)\n");
+    fputs("    find [dir] <name> - Search filenames (non-recursive)\n");
+    fputs("    du [path]         - Disk usage\n");
+    fputs("    sed s/old/new/[g] [f] - Stream substitution\n");
     fputs("    date              - Current date/time\n");
     fputs("    history           - Command history\n");
     fputs("    !!  !N            - Repeat last / Nth history entry\n");
@@ -442,6 +556,10 @@ static int dispatch_one(char *argv[], int argc) {
     if (!strcmp(cmd,"cd"))      return do_cd(argv,argc);
     if (!strcmp(cmd,"pwd"))     return do_pwd(argv,argc);
     if (!strcmp(cmd,"stat"))    return do_stat(argv,argc);
+    if (!strcmp(cmd,"chmod"))   return do_chmod(argv,argc);
+    if (!strcmp(cmd,"find"))    return do_find(argv,argc);
+    if (!strcmp(cmd,"du"))      return do_du(argv,argc);
+    if (!strcmp(cmd,"sed"))     return do_sed(argv,argc);
     if (!strcmp(cmd,"echo"))    return do_echo(argv,argc);
     if (!strcmp(cmd,"date"))    return do_date(argv,argc);
     if (!strcmp(cmd,"history")) return do_history(argv,argc);
