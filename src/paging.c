@@ -4,6 +4,8 @@
 #include "vga.h"
 #include "kstring.h"
 #include "swap.h"
+#include "sched.h"
+#include "serial.h"
 #include <stdint.h>
 
 #define PMM_MAX_FRAMES  65536
@@ -93,19 +95,33 @@ static inline void enable_paging(void) {
     __asm__ volatile ("mov %0, %%cr0" :: "r"(cr0) : "memory");
 }
 
+static inline uint32_t current_dir_phys(void) {
+    uint32_t cr3;
+    __asm__ volatile ("mov %%cr3, %0" : "=r"(cr3));
+    return cr3;
+}
+
+/* Resolves against whatever directory CR3 currently points at, not always
+   the boot-time static page_dir - essential now that paging_clone_dir()
+   gives PDE 1 (where user code lives, see below) its own private table per
+   process instead of aliasing the same one everywhere. Before this, any
+   paging_map() call after a directory switch silently wrote into the old
+   (often unrelated) directory instead of the one actually active. */
 static uint32_t *pte_ptr(uint32_t virt, int alloc) {
     uint32_t di = PAGE_DIR_IDX(virt);
     uint32_t ti = PAGE_TBL_IDX(virt);
 
-    if (!(page_dir[di] & PAGE_PRESENT)) {
+    uint32_t *dir = (uint32_t *)current_dir_phys();
+
+    if (!(dir[di] & PAGE_PRESENT)) {
         if (!alloc) return 0;
         uint32_t phys = pmm_alloc();
         if (!phys) return 0;
         kmemset((void *)phys, 0, PAGE_SIZE);
-        page_dir[di] = phys | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
+        dir[di] = phys | PAGE_PRESENT | PAGE_WRITE | PAGE_USER;
     }
 
-    uint32_t *tbl = (uint32_t *)(page_dir[di] & ~0xFFF);
+    uint32_t *tbl = (uint32_t *)(dir[di] & ~0xFFF);
     return &tbl[ti];
 }
 
@@ -327,6 +343,9 @@ static void page_fault_handler(registers_t *r) {
     int present  = r->err_code & 0x1;
     int write    = r->err_code & 0x2;
 
+    serial_printf("[fault] page fault: pid=%u cr2=%x err=%x eip=%x esp=%x\r\n",
+                  sched_current()->pid, fault_addr, r->err_code, r->eip, r->esp);
+
     if (!present && fault_addr >= HEAP_VIRT_BASE && fault_addr < HEAP_VIRT_MAX) {
         uint32_t page = fault_addr & ~0xFFF;
         uint32_t phys = pmm_alloc();
@@ -428,7 +447,14 @@ uint32_t paging_clone_dir(void) {
 
     for (int i = 0; i < PAGE_ENTRIES; i++) {
         if (!page_dir[i]) continue;
-        if (i < 256) {
+        /* PDE 1 (virt 0x400000-0x7FFFFF) is where every user ELF loads
+           (linker.ld: -Ttext=0x400000) - it can NOT be aliased like the
+           rest of the sub-1GB kernel range, or two processes' code ends up
+           sharing the exact same physical page table entries and each
+           exec()/fork() corrupts whichever other process is still running
+           there. Give it the same full deep-copy treatment as user stack
+           (i>=256) instead of a raw pointer share. */
+        if (i < 256 && i != 1) {
             new_dir[i] = page_dir[i];
         } else {
             uint32_t tbl_phys = page_dir[i] & ~0xFFF;
@@ -454,7 +480,8 @@ uint32_t paging_clone_dir(void) {
 
 void paging_free_user(uint32_t dir_phys) {
     uint32_t *dir = (uint32_t *)dir_phys;
-    for (int i = 256; i < PAGE_ENTRIES; i++) {
+    for (int i = 0; i < PAGE_ENTRIES; i++) {
+        if (i != 1 && i < 256) continue; /* only PDE 1 + i>=256 are ever privately owned, see paging_clone_dir */
         if (!dir[i]) continue;
         uint32_t tbl_phys = dir[i] & ~0xFFF;
         uint32_t *tbl = (uint32_t *)tbl_phys;
