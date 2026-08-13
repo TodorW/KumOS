@@ -798,6 +798,29 @@ static void expand_alias(char *line, int max) {
 
 static int run_pipeline(char *line) {
 
+    /* cmd1; cmd2; cmd3 - run sequentially left to right, each segment
+       fully independent (its own var/alias expansion, its own pipe
+       parsing), same as putting them on separate lines in a script.
+       kush has no quoting at all yet, so a literal ';' can't currently
+       appear inside an argument - not handling that case. */
+    {
+        char *semi = strchr(line, ';');
+        if (semi) {
+            int ret = 0;
+            char *seg = line;
+            while (semi) {
+                *semi = 0;
+                while (*seg == ' ') seg++;
+                if (*seg) ret = run_pipeline(seg);
+                seg = semi + 1;
+                semi = strchr(seg, ';');
+            }
+            while (*seg == ' ') seg++;
+            if (*seg) ret = run_pipeline(seg);
+            return ret;
+        }
+    }
+
     if (try_assign(line)) return 0;
     if (try_alias_cmd(line)) return 0;
 
