@@ -796,45 +796,46 @@ static int run_pipeline(char *line) {
         return ret;
     }
 
-    int pipefd[2];
-    if (sys_pipe(pipefd) < 0) { fputs("pipe failed\n"); return 1; }
+    /* N-stage pipeline (a|b|c|...). Builtins run in-process (no fork), so
+       each stage runs to full completion before the next one starts -
+       stage i's whole output goes into a pipe, then stage i+1 reads it
+       back out. Was hardcoded to exactly 2 stages (parts[0]/parts[1]),
+       silently dropping anything past the second '|' - now loops over
+       however many stages split() found (up to 8). */
+    int prev_read = -1;
+    for (int i = 0; i < nparts; i++) {
+        char *argv[ARG_MAX]; int argc = split(parts[i], argv, ARG_MAX);
+        if (!argc) { if (prev_read >= 0) close(prev_read); return 0; }
 
-    {
-        char *argv[ARG_MAX]; int argc = split(parts[0], argv, ARG_MAX);
-        if (!argc) goto cleanup;
+        int is_last = (i == nparts - 1);
+        int pipefd[2] = {-1, -1};
+        if (!is_last && sys_pipe(pipefd) < 0) {
+            fputs("pipe failed\n");
+            if (prev_read >= 0) close(prev_read);
+            return 1;
+        }
+        int saved_stdin = -1, saved_stdout = -1;
+        if (prev_read >= 0) {
+            saved_stdin = sys_dup2(0, 11);
+            sys_dup2(prev_read, 0);
+            close(prev_read);
+        }
+        if (!is_last) {
+            saved_stdout = sys_dup2(1, 10);
+            sys_dup2(pipefd[1], 1);
+            close(pipefd[1]);
+        }
 
-        int saved_stdout = sys_dup2(1, 10);
-        sys_dup2(pipefd[1], 1);
-        close(pipefd[1]);
-
-        /* was a hand-copied subset of dispatch_one's builtin list (ls/cat/
-           echo/wc/sort/uniq only) that drifted out of sync every time a
-           new builtin got added - route through dispatch_one itself so
-           every builtin (head/tail/grep included) works as a pipe stage,
-           not just the ones someone remembered to copy here */
+        /* Routes through dispatch_one itself (not a hand-copied builtin
+           subset) so every builtin works as a pipe stage automatically. */
         int ret = dispatch_one(argv, argc);
         (void)ret;
 
-        sys_dup2(saved_stdout, 1);
-        close(saved_stdout);
+        if (saved_stdout >= 0) { sys_dup2(saved_stdout, 1); close(saved_stdout); }
+        if (saved_stdin  >= 0) { sys_dup2(saved_stdin,  0); close(saved_stdin);  }
+
+        prev_read = is_last ? -1 : pipefd[0];
     }
-
-    {
-        char *argv[ARG_MAX]; int argc = split(parts[1], argv, ARG_MAX);
-        if (!argc) goto cleanup;
-
-        int saved_stdin = sys_dup2(0, 11);
-        sys_dup2(pipefd[0], 0);
-        close(pipefd[0]);
-
-        int ret = dispatch_one(argv, argc);
-        (void)ret;
-
-        sys_dup2(saved_stdin, 0);
-        close(saved_stdin);
-    }
-
-cleanup:
     return 0;
 }
 
