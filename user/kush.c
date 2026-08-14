@@ -587,8 +587,9 @@ static int do_help(char *argv[], int argc) {
     fputs("    CAT.ELF           - File reader\n");
     fputs("    SYSINFO.ELF       - System info\n\n");
     fputs("  Pipes:  cmd1 | cmd2 | cmd3 (any number of stages)\n\n");
-    fputs("  Job control:  cmd &  runs an external command in the background.\n");
-    fputs("    Ctrl+Z stops the foreground job (fg/bg to resume it).\n\n");
+    fputs("  Job control:  cmd &  or  cmd1 | cmd2 &  runs in the background.\n");
+    fputs("    Ctrl+Z stops the foreground job (fg/bg to resume it).\n");
+    fputs("    Job specs: %N, %+ (current), %- (previous).\n\n");
     fputs("  Scripts (source <file> or . <file>), one keyword per own line:\n");
     fputs("    if <cmd> / then / ... / elif <cmd> / ... / else / ... / fi\n");
     fputs("    for VAR in a b c / do / ... / done\n");
@@ -642,6 +643,29 @@ static kush_job_t *job_last(void) {
     return best;
 }
 
+/* Second-most-recent job by id - the "%-" job. */
+static kush_job_t *job_prev(void) {
+    kush_job_t *first = 0, *second = 0;
+    for (int i = 0; i < KUSH_MAX_JOBS; i++) {
+        if (!g_jobs[i].used) continue;
+        if (!first || g_jobs[i].id > first->id) { second = first; first = &g_jobs[i]; }
+        else if (!second || g_jobs[i].id > second->id) second = &g_jobs[i];
+    }
+    return second;
+}
+
+/* Resolves a job-control argument the way real shells do: "%N"/"N" is a
+   job id, "%+"/"%%" is the current (most recent) job, "%-" is the
+   previous one. Shared by fg/bg/wait so all three accept the same
+   spelling. */
+static kush_job_t *job_by_spec(const char *spec) {
+    if (!spec || !spec[0]) return job_last();
+    if (spec[0] == '%') spec++;
+    if ((spec[0] == '+' || spec[0] == '%') && spec[1] == 0) return job_last();
+    if (spec[0] == '-' && spec[1] == 0) return job_prev();
+    return job_find(atoi(spec));
+}
+
 /* Reaps any background job that finished on its own (sys_procstate()==2,
    exited but not yet waited on) and prints the "Done" line a real shell
    shows just before its next prompt. Non-blocking - sys_waitstatus() on an
@@ -676,18 +700,15 @@ static int do_jobs(char *argv[], int argc) {
     return 0;
 }
 
-/* fg [%N] - bring a job to the foreground: SIGCONT it if stopped, then
-   block on it exactly like a freshly-forked foreground command would
-   (same sys_waitstatus() path do_exec() uses), so a re-stopped or
-   Ctrl+C'd fg job re-enters the job table correctly either way. */
-static int do_fg(char *argv[], int argc) {
-    kush_job_t *j = (argc > 1) ? job_find(atoi(argv[1][0]=='%'?argv[1]+1:argv[1])) : job_last();
-    if (!j) { fputs("kush: fg: no such job\n"); return 1; }
-    printf("%s\n", j->cmd);
+/* Blocks on a job's pid exactly like a freshly-forked foreground command
+   would (same sys_waitstatus() path do_exec() uses) - shared by fg and
+   wait so a re-stopped or Ctrl+C'd job re-enters the job table correctly
+   either way, in both callers. Removes j from the job table up front
+   (re-added under a fresh id if it stops again, same as do_exec()). */
+static int job_wait_fg(kush_job_t *j) {
     int pid = j->pid;
     char cmd[48]; strncpy(cmd, j->cmd, sizeof(cmd)-1); cmd[sizeof(cmd)-1]=0;
     j->used = 0;
-    sys_kill(pid, KUSH_SIGCONT);
 
     int status = 0;
     int r = sys_waitstatus(pid, &status);
@@ -699,16 +720,47 @@ static int do_fg(char *argv[], int argc) {
     return status;
 }
 
+/* fg [%N] - bring a job to the foreground: SIGCONT it if stopped, then
+   block on it. */
+static int do_fg(char *argv[], int argc) {
+    kush_job_t *j = (argc > 1) ? job_by_spec(argv[1]) : job_last();
+    if (!j) { fputs("kush: fg: no such job\n"); return 1; }
+    printf("%s\n", j->cmd);
+    sys_kill(j->pid, KUSH_SIGCONT);
+    return job_wait_fg(j);
+}
+
 /* bg [%N] - resume a stopped job in the background: SIGCONT it, leave it
    in the job table, don't wait. No-op (with a message) on a job that's
    already running. */
 static int do_bg(char *argv[], int argc) {
-    kush_job_t *j = (argc > 1) ? job_find(atoi(argv[1][0]=='%'?argv[1]+1:argv[1])) : job_last();
+    kush_job_t *j = (argc > 1) ? job_by_spec(argv[1]) : job_last();
     if (!j) { fputs("kush: bg: no such job\n"); return 1; }
     if (sys_procstate(j->pid) != 1) { printf("kush: bg: job %d already running\n", j->id); return 1; }
     sys_kill(j->pid, KUSH_SIGCONT);
     printf("[%d]+  %s &\n", j->id, j->cmd);
     return 0;
+}
+
+/* wait [%N] - with no argument, blocks until every current background job
+   has exited (real POSIX semantics: doesn't touch jobs that get started
+   after wait begins, but that's not possible here since kush is single-
+   threaded and can't start a new one mid-wait anyway). With an argument,
+   waits for just that one job. A job that gets stopped instead of exiting
+   re-enters the job table exactly like fg does rather than hanging. */
+static int do_wait(char *argv[], int argc) {
+    if (argc > 1) {
+        kush_job_t *j = job_by_spec(argv[1]);
+        if (!j) { fputs("kush: wait: no such job\n"); return 1; }
+        return job_wait_fg(j);
+    }
+    int any = 0, status = 0;
+    for (int i = 0; i < KUSH_MAX_JOBS; i++) {
+        if (!g_jobs[i].used) continue;
+        any = 1;
+        status = job_wait_fg(&g_jobs[i]);
+    }
+    return any ? status : 0;
 }
 
 static int do_exec(char *argv[], int argc) {
@@ -843,6 +895,7 @@ static int dispatch_one(char *argv[], int argc) {
     if (!strcmp(cmd,"jobs"))    return do_jobs(argv,argc);
     if (!strcmp(cmd,"fg"))      return do_fg(argv,argc);
     if (!strcmp(cmd,"bg"))      return do_bg(argv,argc);
+    if (!strcmp(cmd,"wait"))    return do_wait(argv,argc);
     if (!strcmp(cmd,"clear"))   { fputs("\033[2J\033[H"); return 0; }
     return do_exec(argv, argc);
 }
