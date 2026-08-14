@@ -94,6 +94,13 @@ void signal_check(void) {
         if ((uintptr_t)h == SIG_IGN) continue;
         if ((uintptr_t)h == SIG_DFL || h == 0) {
             if (sig == SIGCHLD || sig == SIGCONT) continue;
+            /* Unlike SIGSTOP (handled synchronously in signal_send(), can't
+               be caught/ignored), SIGTSTP's default action is also "stop"
+               but it's a real catchable/ignorable signal - a handler above
+               this branch already intercepted it if one was registered, so
+               reaching here means default behavior: stop, same mechanism
+               sched_sleep() uses (set state, then yield away). */
+            if (sig == SIGTSTP) { cur->state = TASK_STOPPED; sched_yield(); return; }
             sched_exit_code(128 + sig);
             return;
         }
