@@ -569,7 +569,8 @@ static int do_help(char *argv[], int argc) {
     return 0;
 }
 
-static int do_exec(const char *cmd) {
+static int do_exec(char *argv[], int argc) {
+    const char *cmd = argv[0];
 
     char upper[64]; int i=0;
     while(cmd[i]&&i<60){char c=cmd[i];if(c>='a'&&c<='z')c-=32;upper[i++]=c;}
@@ -577,34 +578,74 @@ static int do_exec(const char *cmd) {
 
     if (!strchr(upper, '.')) { strcat(upper, ".ELF"); }
 
-    /* NOTE: this replaces kush itself (real execve, no fork). A real
-       fork()+exec()+wait() was tried again this round and got much
-       further than before: the round12/13 bug (paging_clone_dir()
-       aliasing the page directory entry user ELF code loads into, PDE 1
-       at virt 0x400000) is genuinely fixed now - see src/paging.c's
-       comments on paging_clone_dir()/pte_ptr() - and a real, separate
-       reentrancy bug in sched_yield() (a premature `sti` before the
-       actual stack-pointer swap in switch_context(), letting a nested
-       timer tick corrupt a mid-switch task's register frame) is also
-       fixed, verified by serial-tracing the corrupted invalid-opcode
-       panic it caused and watching it disappear.
-
-       But a THIRD, deeper bug remains: after sched_waitpid()'s busy-wait
-       loop yields many times (waiting for the forked child to exit) and
-       finally returns, kush's own return-to-ring-3 (the plain `iret` at
-       the end of isr128) lands in garbage - EIP and ESP both end up as
-       stack-address-looking values, not the correct saved ones. Confirmed
-       via serial tracing that the syscall's own saved register frame
-       reads back correct right up to the very last C statement before
-       isr128's fixed pop/iret sequence runs (with interrupts confirmed
-       off throughout, and even with -O0 forced on the entire call chain
-       to rule out a compiler bug) - yet the actual iret still picks up
-       wrong values. Root cause not found this round. Left as plain
-       sys_exec() rather than ship a reproducible crash; see
-       project-kumos-round14 memory for the full debugging trail. */
-    int r = sys_exec(upper);
-    if (r < 0) { printf("kush: %s: not found\n", cmd); return 127; }
-    return r;
+    /* Real fork()+execve()+waitpid(), finally. This took six real bugs
+       across this round and the previous ones to actually nail down:
+       1) paging_clone_dir() aliased PDE 1 (virt 0x400000, where every user
+          ELF's code loads) instead of deep-copying it - fixed in
+          src/paging.c (round 14).
+       2) sched_yield() had a premature `sti` before the stack-pointer
+          swap in switch_context(), letting a nested timer tick corrupt a
+          mid-switch task's register frame - fixed in boot/sched_switch.asm
+          + src/sched.c (round 14).
+       3) Every fork()'d child leaked its entire private page directory on
+          exit (sched_exit_code() freed the kernel stack but never touched
+          page_dir_phys) - fixed in src/sched.c.
+       4) sc_execve() freed the caller's own page directory (still the
+          live CR3!) *before* building and switching to the replacement -
+          a real use-after-free of actively-mapped page tables. Fixed by
+          building+switching first, freeing the old one only once it's no
+          longer live - src/syscall.c.
+       5) The actual root cause of the long-standing "return to ring3 after
+          waitpid lands in garbage EIP/ESP" bug, finally nailed down with a
+          hardware watchpoint: paging_clone_dir()'s "PDE1 is special, deep-
+          copy it" fix (bug #1 above) missed that the user STACK needs the
+          exact same treatment. ELF_USER_STACK_TOP is exactly 0x40000000
+          (1GB) and the stack grows down from there, landing at virt
+          0x3FFFC000-0x3FFFFFFF - PDE 255, one PDE short of the ">=256 is
+          always private" boundary the function assumed covered the whole
+          per-process range. PDE 255 was being ALIASED (raw pointer share)
+          across fork(), so a forked child's stack lived in the exact same
+          physical page table as its parent's. fork() alone (child never
+          touching stack pages beyond what it inherited) happened not to
+          visibly corrupt anything, but execve() unconditionally remaps
+          fresh stack pages - and since that remap hit the shared table, an
+          execve()'d child silently overwrote its own parent's live stack
+          contents out from under it. Confirmed live: kush's own saved
+          return address flipped from a valid value to 0 at the exact
+          instant its execve()'d child (hello.elf) zeroed its own fresh
+          stack page. kush's syscall-return machinery (isr128, the fabri-
+          cated iret frame, switch_context) was correct the entire time -
+          fixed in src/paging.c (paging_clone_dir()/paging_free_user()).
+       6) One more crash survived all five fixes above, but only on the
+          SECOND fork()+execve() in a row (any two programs, not sysinfo-
+          specific) - a plain kmemcpy() page fault at exactly CR2=0x1000000
+          (16MB). paging_init() only ever identity-mapped the first 16MB of
+          physical RAM (4 static page tables, a leftover fixed constant),
+          but pmm_alloc() hands out physical frames anywhere across all of
+          mem_kb - and paging_clone_dir() (plus other code) treats whatever
+          pmm_alloc() returns as a directly-dereferenceable kernel pointer
+          via that identity mapping. The first fork()+exec() consumed just
+          barely enough memory (clone + ELF pages + both now-deep-copied
+          stacks) to still land under 16MB; the second one reliably pushed
+          pmm_alloc() past it. Fixed by sizing the identity map to actual
+          RAM at boot instead of a fixed 16MB - src/paging.c (paging_init()).
+       Also fixed along the way: sc_exit() silently discarded its own
+       `code` argument and always exited 0 (never seen because nothing
+       ever chained fork()+wait() far enough to observe a real child exit
+       code before), and sys_fork()'s inline asm was missing the "memory"
+       clobber every other syscall wrapper already has. */
+    int pid = sys_fork();
+    if (pid < 0) { printf("kush: fork failed\n"); return 1; }
+    if (pid == 0) {
+        char *nargv[16]; int n = 0;
+        nargv[n++] = upper;
+        for (int j = 1; j < argc && n < 15; j++) nargv[n++] = argv[j];
+        nargv[n] = 0;
+        execve(upper, nargv);
+        printf("kush: %s: not found\n", cmd);
+        exit(127);
+    }
+    return waitpid(pid);
 }
 
 static int run_script(const char *filename);
@@ -644,7 +685,7 @@ static int dispatch_one(char *argv[], int argc) {
     if (!strcmp(cmd,"write"))   return do_write(argv,argc);
     if (!strcmp(cmd,"kill"))    return do_kill(argv,argc);
     if (!strcmp(cmd,"clear"))   { fputs("\033[2J\033[H"); return 0; }
-    return do_exec(cmd);
+    return do_exec(argv, argc);
 }
 
 /* Strips >, >>, < tokens (and their filename argument) out of argv,
