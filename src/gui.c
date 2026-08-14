@@ -473,6 +473,19 @@ static int point_in(int px, int py, int x, int y, int w, int h) {
     return px>=x && px<x+w && py>=y && py<y+h;
 }
 
+/* Set once per frame in gui_run() right before the windows are drawn -
+   every render_*() function can then ask gui_pressed() whether ITS OWN
+   button is the one currently being held down, instead of every
+   gui_button() call across every window hardcoding "not pressed" (which
+   is what all of them did before this - the pressed/C_BUTTON visual
+   state gui_button() already supported was simply never wired up to
+   anything real). */
+static int cur_mx = -1, cur_my = -1, cur_mdown = 0;
+
+static int gui_pressed(int x, int y, int w, int h) {
+    return cur_mdown && point_in(cur_mx, cur_my, x, y, w, h);
+}
+
 #define ICON_START_Y 16
 #define ICON_SLOT    38
 
@@ -1097,7 +1110,8 @@ static void render_files(winrec_t *w) {
     } else {
         gui_printf(cx, cy, C_YELLOW, C_BLACK, "%s", files_entries[files_selected].name);
         gui_puts(cx, cy+10, files_previewbuf, C_LIGHT_GREEN, C_BLACK);
-        gui_button(w->x+w->w-40, w->y+w->h-14, 34, 11, "Back", 0);
+        gui_button(w->x+w->w-40, w->y+w->h-14, 34, 11, "Back",
+                   gui_pressed(w->x+w->w-40, w->y+w->h-14, 34, 11));
     }
 }
 
@@ -1238,7 +1252,8 @@ static void render_calc(winrec_t *w) {
     for (int r=0;r<4;r++)
         for (int c2=0;c2<4;c2++)
             gui_button(gx+c2*(CALC_BW+CALC_GAP), gy+r*(CALC_BH+CALC_GAP),
-                       CALC_BW, CALC_BH, calc_labels[r][c2], 0);
+                       CALC_BW, CALC_BH, calc_labels[r][c2],
+                       gui_pressed(gx+c2*(CALC_BW+CALC_GAP), gy+r*(CALC_BH+CALC_GAP), CALC_BW, CALC_BH));
 }
 
 static void calc_handle_click(winrec_t *w, int mx, int my) {
@@ -1274,8 +1289,8 @@ static void render_editor(winrec_t *w) {
     if ((timer_ticks()/50) & 1)
         gui_rect_fill(tx+editor_col*8, ty+editor_row*9, 7, 8, C_LIGHT_GREY);
 
-    gui_button(w->x+4,  w->y+w->h-16, 40, 12, "Save", 0);
-    gui_button(w->x+48, w->y+w->h-16, 40, 12, "Load", 0);
+    gui_button(w->x+4,  w->y+w->h-16, 40, 12, "Save", gui_pressed(w->x+4,  w->y+w->h-16, 40, 12));
+    gui_button(w->x+48, w->y+w->h-16, 40, 12, "Load", gui_pressed(w->x+48, w->y+w->h-16, 40, 12));
     gui_puts(w->x+94, w->y+w->h-14, editor_status, C_DARK_GREY, C_WIN_BG);
 }
 
@@ -1357,10 +1372,10 @@ static void render_pkg(winrec_t *w) {
         gui_puts(cx, cy+i*PKGWIN_ROW_H, pkgwin_name(i), fg, bg);
     }
 
-    gui_button(w->x+3,   by, 44, 11, "Update", 0);
-    gui_button(w->x+49,  by, 36, 11, "Instl",  0);
-    gui_button(w->x+87,  by, 40, 11, "Rmove",  0);
-    gui_button(w->x+129, by, 36, 11, "Run",    0);
+    gui_button(w->x+3,   by, 44, 11, "Update", gui_pressed(w->x+3,   by, 44, 11));
+    gui_button(w->x+49,  by, 36, 11, "Instl",  gui_pressed(w->x+49,  by, 36, 11));
+    gui_button(w->x+87,  by, 40, 11, "Rmove",  gui_pressed(w->x+87,  by, 40, 11));
+    gui_button(w->x+129, by, 36, 11, "Run",    gui_pressed(w->x+129, by, 36, 11));
     gui_puts(w->x+3, by+12, pkg_status, C_YELLOW, C_WIN_BG);
 }
 
@@ -1432,7 +1447,7 @@ static void render_browser(winrec_t *w) {
     gui_puts(w->x+5, cy+2, browser_urlbar, C_BLACK, C_WHITE);
     if (browser_editing && (timer_ticks()/50) & 1)
         gui_rect_fill(w->x+5+(int)kstrlen(browser_urlbar)*8, cy+1, 6, 9, C_LIGHT_GREY);
-    gui_button(w->x+w->w-40, cy, 38, 12, "Go", 0);
+    gui_button(w->x+w->w-40, cy, 38, 12, "Go", gui_pressed(w->x+w->w-40, cy, 38, 12));
     cy += 14;
 
     gui_puts(w->x+3, cy, browser_status(), C_DARK_GREY, C_WIN_BG);
@@ -1630,6 +1645,12 @@ void gui_run(void) {
         int mx = m->x, my = m->y;
         if (mx < 0) mx = 0; if (mx >= GUI_WIDTH)  mx = GUI_WIDTH-1;
         if (my < 0) my = 0; if (my >= GUI_HEIGHT) my = GUI_HEIGHT-1;
+
+        /* one frame of latency (next iteration's render pass reads these,
+           this iteration's already happened above) - same tradeoff any
+           immediate-mode UI redrawn every frame makes, not worth an extra
+           render pass just to shave off one frame of button-press lag. */
+        cur_mx = mx; cur_my = my; cur_mdown = m->left;
 
         gui_draw_cursor(mx, my);
         gui_flip();
