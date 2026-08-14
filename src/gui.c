@@ -439,6 +439,16 @@ static void icon_glyph(int x, int y, icon_kind_t kind) {
         gui_vline(x+10, y+1, 12, C_NAVY);
         gui_hline(x+2, y+7, 16, C_NAVY);
         break;
+    case ICON_PAINT:
+        gui_rect_fill(x, y+2, 20, 11, C_WHITE);
+        gui_rect(x, y+2, 20, 11, C_DARK_GREY);
+        gui_rect_fill(x+2,  y+4, 3, 3, C_RED);
+        gui_rect_fill(x+7,  y+4, 3, 3, C_LIGHT_GREEN);
+        gui_rect_fill(x+12, y+4, 3, 3, C_LIGHT_BLUE);
+        gui_rect_fill(x+2,  y+9, 3, 3, C_YELLOW);
+        gui_rect_fill(x+7,  y+9, 3, 3, C_PURPLE);
+        gui_rect_fill(x+12, y+9, 3, 3, C_BLACK);
+        break;
     }
 }
 
@@ -508,7 +518,7 @@ static int gui_pressed(int x, int y, int w, int h) {
    (t>=WIN_TERMINAL && t<=WIN_TERMINAL3) work for "is this a terminal". */
 typedef enum {
     WIN_TERMINAL=0, WIN_TERMINAL2=1, WIN_TERMINAL3=2, WIN_FILES=3, WIN_SYSMON=4,
-    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_WRITE=9, WIN_COUNT=10
+    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_WRITE=9, WIN_PAINT=10, WIN_COUNT=11
 } wintype_t;
 
 typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
@@ -529,6 +539,7 @@ static const char *win_title(int t) {
         case WIN_PKG:      return "Packages";
         case WIN_BROWSER:  return "Web";
         case WIN_WRITE:    return "KumWrite";
+        case WIN_PAINT:    return "Paint";
     }
     return "";
 }
@@ -710,7 +721,8 @@ void gui_draw_desktop(void) {
     gui_icon(8, ICON_START_Y + 5*ICON_SLOT, "Pkgs",  C_TEAL,       ICON_PKG);
     gui_icon(8, ICON_START_Y + 6*ICON_SLOT, "Web",   C_LIGHT_BLUE, ICON_BROWSER);
     gui_icon(8, ICON_START_Y + 7*ICON_SLOT, "Write", C_PINK,       ICON_NOTE);
-    gui_icon(8, ICON_START_Y + 8*ICON_SLOT, "Exit",  C_DARK_GREY,  ICON_EXIT);
+    gui_icon(8, ICON_START_Y + 8*ICON_SLOT, "Paint", C_ORANGE,     ICON_PAINT);
+    gui_icon(8, ICON_START_Y + 9*ICON_SLOT, "Exit",  C_DARK_GREY,  ICON_EXIT);
 
     gui_printf(52, 18, C_LIGHT_GREY, C_DESKTOP,
                "Click icons to open apps");
@@ -1455,6 +1467,84 @@ static void write_handle_click(winrec_t *w, int mx, int my) {
     }
 }
 
+/* Paint - a simple pixel canvas. Genuinely exercises the framebuffer
+   directly rather than just text/rects like every other app so far.
+   Canvas is stored as its own indexed-color byte array (same encoding
+   backbuf/gui_pixel already use) and blitted a row at a time via
+   kmemcpy straight into backbuf - a per-pixel gui_pixel() loop over
+   PAINT_W*PAINT_H (60000 calls/frame) would've been the single most
+   expensive thing in the whole GUI by a wide margin; row-at-a-time
+   kmemcpy is the same trick the desktop-background cache uses to avoid
+   that cost, just applied to content that (unlike the desktop) actually
+   changes and can't be pre-computed once. */
+#define PAINT_W 300
+#define PAINT_H 190
+
+static uint8_t paint_canvas[PAINT_H][PAINT_W];
+static int     paint_inited = 0;
+static uint8_t paint_color = C_BLACK;
+static int     g_painting = 0;
+
+static const uint8_t paint_palette[8] = {
+    C_BLACK, C_RED, C_LIGHT_GREEN, C_LIGHT_BLUE, C_YELLOW, C_WHITE, C_BROWN, C_PURPLE
+};
+
+static void paint_clear(void) {
+    for (int y=0;y<PAINT_H;y++)
+        for (int x=0;x<PAINT_W;x++)
+            paint_canvas[y][x] = C_WHITE;
+}
+
+/* A 3x3 dab instead of a single pixel - painting only plots wherever the
+   mouse actually was each frame (no line interpolation between last
+   frame's position and this one), so a bare single-pixel brush left
+   visible gaps in anything but a very slow stroke. Still not a real line
+   between samples, just a big enough dot that consecutive samples
+   overlap at ordinary drag speed. */
+static void paint_dot(int lx, int ly) {
+    for (int dy=-1; dy<=1; dy++)
+        for (int dx=-1; dx<=1; dx++) {
+            int x = lx+dx, y = ly+dy;
+            if (x>=0 && x<PAINT_W && y>=0 && y<PAINT_H) paint_canvas[y][x] = paint_color;
+        }
+}
+
+static void render_paint(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "Paint");
+    if (!paint_inited) { paint_clear(); paint_inited = 1; }
+
+    int cx0 = w->x+4, cy0 = w->y+14;
+    gui_rect(cx0-1, cy0-1, PAINT_W+2, PAINT_H+2, C_WIN_BORDER);
+    for (int y=0;y<PAINT_H;y++) {
+        int sy = cy0+y;
+        if ((unsigned)sy >= GUI_HEIGHT) break;
+        kmemcpy(backbuf + sy*GUI_WIDTH + cx0, paint_canvas[y], PAINT_W);
+    }
+
+    int py = cy0 + PAINT_H + 6;
+    for (int i=0;i<8;i++) {
+        int px = cx0 + i*20;
+        gui_rect_fill(px, py, 16, 16, paint_palette[i]);
+        gui_rect(px, py, 16, 16, paint_color==paint_palette[i] ? C_WHITE : C_WIN_BORDER);
+    }
+    gui_button(cx0+8*20+8, py, 40, 16, "Clear", gui_pressed(cx0+8*20+8, py, 40, 16));
+}
+
+static void paint_handle_click(winrec_t *w, int mx, int my) {
+    int cx0 = w->x+4, cy0 = w->y+14;
+    int py = cy0 + PAINT_H + 6;
+
+    for (int i=0;i<8;i++) {
+        int px = cx0 + i*20;
+        if (point_in(mx, my, px, py, 16, 16)) { paint_color = paint_palette[i]; return; }
+    }
+    if (point_in(mx, my, cx0+8*20+8, py, 40, 16)) { paint_clear(); return; }
+    if (point_in(mx, my, cx0, cy0, PAINT_W, PAINT_H)) {
+        paint_dot(mx-cx0, my-cy0);
+        g_painting = 1;
+    }
+}
+
 static int  pkg_selected = -1;
 static char pkg_status[24] = "";
 
@@ -1641,6 +1731,7 @@ static int launcher_build(launch_item_t *items, int max) {
     if (n<max) items[n++] = (launch_item_t){"Packages",       ICON_PKG,     WIN_PKG,      0, 0};
     if (n<max) items[n++] = (launch_item_t){"Browser",        ICON_BROWSER, WIN_BROWSER,  0, 0};
     if (n<max) items[n++] = (launch_item_t){"KumWrite",       ICON_NOTE,    WIN_WRITE,    0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Paint",          ICON_PAINT,   WIN_PAINT,    0, 0};
     int total = pkgwin_total();
     for (int i=0;i<total && n<max;i++) {
         if (!pkgwin_installed(i)) continue;
@@ -1664,6 +1755,7 @@ static void launcher_open_wintype(int t) {
         case WIN_PKG:      wm_open(WIN_PKG,     690, 500, 300, 230);       break;
         case WIN_BROWSER:  wm_open(WIN_BROWSER, 260,  60, 500, 420);       break;
         case WIN_WRITE:    wm_open(WIN_WRITE,   300, 100, 520, 400);       break;
+        case WIN_PAINT:    wm_open(WIN_PAINT,   340,  80, 340, 260);       break;
     }
 }
 
@@ -1774,6 +1866,7 @@ void gui_run(void) {
             else if (t==WIN_PKG) render_pkg(w);
             else if (t==WIN_BROWSER) render_browser(w);
             else if (t==WIN_WRITE) render_write(w);
+            else if (t==WIN_PAINT) render_paint(w);
         }
 
         gui_draw_taskbar();
@@ -1942,6 +2035,8 @@ void gui_run(void) {
                     browser_handle_click(w, mx, my);
                 } else if (hit == WIN_WRITE) {
                     write_handle_click(w, mx, my);
+                } else if (hit == WIN_PAINT) {
+                    paint_handle_click(w, mx, my);
                 }
             } else if (my < 10 && mx < 33) {
                 launcher_open = 1;
@@ -1962,7 +2057,8 @@ void gui_run(void) {
                 else if (iconidx==5) wm_open(WIN_PKG,     690, 500, 300, 230);
                 else if (iconidx==6) wm_open(WIN_BROWSER, 260,  60, 500, 420);
                 else if (iconidx==7) wm_open(WIN_WRITE,   300, 100, 520, 400);
-                else if (iconidx==8) running = 0;
+                else if (iconidx==8) wm_open(WIN_PAINT,   340,  80, 340, 260);
+                else if (iconidx==9) running = 0;
             }
         }
 
@@ -1988,6 +2084,20 @@ void gui_run(void) {
             w->w = nw; w->h = nh;
         }
         if (!left_now) resizing = -1;
+
+        /* Continuous painting while the button stays down, same shape as
+           the dragging/resizing blocks above - paint_handle_click() above
+           only lays down the first pixel (it's on the click-down edge),
+           this is what makes dragging the mouse across the canvas draw a
+           real stroke instead of just isolated dots. */
+        if (left_now && g_painting && wins[WIN_PAINT].active) {
+            winrec_t *w = &wins[WIN_PAINT];
+            int cx0 = w->x+4, cy0 = w->y+14;
+            int lx = mx-cx0, ly = my-cy0;
+            if (lx >= 0 && lx < PAINT_W && ly >= 0 && ly < PAINT_H)
+                paint_dot(lx, ly);
+        }
+        if (!left_now) g_painting = 0;
 
         prev_left = left_now;
 
