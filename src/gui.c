@@ -20,6 +20,7 @@
 #include "vfs.h"
 #include "net.h"
 #include "speaker.h"
+#include "browser.h"
 #include <stdint.h>
 
 static inline void outb(uint16_t p, uint8_t v) { __asm__ volatile("outb %0,%1"::"a"(v),"Nd"(p)); }
@@ -411,6 +412,20 @@ static void icon_glyph(int x, int y, icon_kind_t kind) {
         gui_hline(x+8, y+7, 4, C_YELLOW);
         gui_vline(x+9, y+5, 4, C_YELLOW);
         break;
+    case ICON_BROWSER:
+        /* a small globe - rows of shrinking width fake a circle, no
+           circle primitive to draw with, plus a meridian down the
+           middle so it doesn't just read as a plain blob at this size. */
+        gui_hline(x+4, y+1, 12, C_LIGHT_BLUE);
+        gui_hline(x+2, y+3, 16, C_LIGHT_BLUE);
+        gui_hline(x+1, y+5, 18, C_LIGHT_BLUE);
+        gui_hline(x+1, y+7, 18, C_LIGHT_BLUE);
+        gui_hline(x+1, y+9, 18, C_LIGHT_BLUE);
+        gui_hline(x+2, y+11, 16, C_LIGHT_BLUE);
+        gui_hline(x+4, y+13, 12, C_LIGHT_BLUE);
+        gui_vline(x+10, y+1, 12, C_NAVY);
+        gui_hline(x+2, y+7, 16, C_NAVY);
+        break;
     }
 }
 
@@ -467,7 +482,7 @@ static int point_in(int px, int py, int x, int y, int w, int h) {
    (t>=WIN_TERMINAL && t<=WIN_TERMINAL3) work for "is this a terminal". */
 typedef enum {
     WIN_TERMINAL=0, WIN_TERMINAL2=1, WIN_TERMINAL3=2, WIN_FILES=3, WIN_SYSMON=4,
-    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_COUNT=8
+    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_COUNT=9
 } wintype_t;
 
 typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
@@ -486,6 +501,7 @@ static const char *win_title(int t) {
         case WIN_CALC:     return "Calculator";
         case WIN_EDITOR:   return "Notepad";
         case WIN_PKG:      return "Packages";
+        case WIN_BROWSER:  return "Web";
     }
     return "";
 }
@@ -665,7 +681,8 @@ void gui_draw_desktop(void) {
     gui_icon(8, ICON_START_Y + 3*ICON_SLOT, "Calc",  C_BROWN,      ICON_CALC);
     gui_icon(8, ICON_START_Y + 4*ICON_SLOT, "Note",  C_LIGHT_BLUE, ICON_NOTE);
     gui_icon(8, ICON_START_Y + 5*ICON_SLOT, "Pkgs",  C_TEAL,       ICON_PKG);
-    gui_icon(8, ICON_START_Y + 6*ICON_SLOT, "Exit",  C_DARK_GREY,  ICON_EXIT);
+    gui_icon(8, ICON_START_Y + 6*ICON_SLOT, "Web",   C_LIGHT_BLUE, ICON_BROWSER);
+    gui_icon(8, ICON_START_Y + 7*ICON_SLOT, "Exit",  C_DARK_GREY,  ICON_EXIT);
 
     gui_printf(52, 18, C_LIGHT_GREY, C_DESKTOP,
                "Click icons to open apps");
@@ -1397,6 +1414,70 @@ static void pkg_handle_click(winrec_t *w, int mx, int my) {
     }
 }
 
+/* kubrowser: a real DNS+TCP/TLS fetch (browser.c, reusing the from-scratch
+   TLS 1.2 stack) followed by a tag-stripping HTML-to-text pass - a reader,
+   not a layout engine. Default home page is Ecosia per the European-
+   defaults preference for anything browser-shaped on this OS. */
+#define BROWSER_URL_MAX 128
+static char browser_urlbar[BROWSER_URL_MAX] = "https://www.ecosia.org/";
+static int  browser_editing = 1;
+static int  browser_scroll  = 0;
+
+static void render_browser(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "Browser");
+
+    int cy = w->y + 12;
+    gui_rect_fill(w->x+3, cy, w->w-46, 12, C_WHITE);
+    gui_rect(w->x+3, cy, w->w-46, 12, browser_editing ? C_NAVY : C_LIGHT_GREY);
+    gui_puts(w->x+5, cy+2, browser_urlbar, C_BLACK, C_WHITE);
+    if (browser_editing && (timer_ticks()/50) & 1)
+        gui_rect_fill(w->x+5+(int)kstrlen(browser_urlbar)*8, cy+1, 6, 9, C_LIGHT_GREY);
+    gui_button(w->x+w->w-40, cy, 38, 12, "Go", 0);
+    cy += 14;
+
+    gui_puts(w->x+3, cy, browser_status(), C_DARK_GREY, C_WIN_BG);
+    cy += 10;
+
+    int content_y0 = cy;
+    int content_h  = w->h - (content_y0 - w->y) - 4;
+    if (content_h < 0) content_h = 0;
+    gui_rect_fill(w->x+1, content_y0, w->w-2, content_h, C_WHITE);
+
+    int rows  = content_h / 9;
+    int total = browser_line_count();
+    int maxscroll = total - rows; if (maxscroll < 0) maxscroll = 0;
+    if (browser_scroll > maxscroll) browser_scroll = maxscroll;
+    if (browser_scroll < 0) browser_scroll = 0;
+
+    if (total == 0) {
+        gui_puts(w->x+3, content_y0+2, "Type a URL above and press Enter.", C_DARK_GREY, C_WHITE);
+    } else {
+        for (int i = 0; i < rows; i++) {
+            int li = browser_scroll + i;
+            if (li >= total) break;
+            gui_puts(w->x+3, content_y0+2+i*9, browser_line_at(li), C_BLACK, C_WHITE);
+        }
+    }
+}
+
+/* Blocking, same as every other network op in this OS (cmd_https, the
+   package manager's own fetches) - no async/threads to do it any other
+   way. The whole GUI freezes for the duration of the fetch. */
+static void browser_go(void) {
+    browser_editing = 0;
+    browser_scroll = 0;
+    browser_navigate(browser_urlbar);
+    kstrncpy(browser_urlbar, browser_url(), BROWSER_URL_MAX-1);
+    browser_urlbar[BROWSER_URL_MAX-1] = 0;
+}
+
+static void browser_handle_click(winrec_t *w, int mx, int my) {
+    int cy = w->y + 12;
+    if (point_in(mx, my, w->x+3, cy, w->w-46, 12)) { browser_editing = 1; return; }
+    if (point_in(mx, my, w->x+w->w-40, cy, 38, 12)) { browser_go(); return; }
+    browser_editing = 0;
+}
+
 #define LAUNCH_ROW_H 16
 #define LAUNCH_W     168
 #define LAUNCH_MAX   16
@@ -1413,6 +1494,7 @@ static int launcher_build(launch_item_t *items, int max) {
     if (n<max) items[n++] = (launch_item_t){"Calculator",     ICON_CALC,    WIN_CALC,     0, 0};
     if (n<max) items[n++] = (launch_item_t){"Notepad",        ICON_NOTE,    WIN_EDITOR,   0, 0};
     if (n<max) items[n++] = (launch_item_t){"Packages",       ICON_PKG,     WIN_PKG,      0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Browser",        ICON_BROWSER, WIN_BROWSER,  0, 0};
     int total = pkgwin_total();
     for (int i=0;i<total && n<max;i++) {
         if (!pkgwin_installed(i)) continue;
@@ -1434,6 +1516,7 @@ static void launcher_open_wintype(int t) {
         case WIN_CALC:     wm_open(WIN_CALC,    480, 500, 190, 230);       break;
         case WIN_EDITOR:   wm_open(WIN_EDITOR,   40, 500, 420, 230);       break;
         case WIN_PKG:      wm_open(WIN_PKG,     690, 500, 300, 230);       break;
+        case WIN_BROWSER:  wm_open(WIN_BROWSER, 260,  60, 500, 420);       break;
     }
 }
 
@@ -1536,6 +1619,7 @@ void gui_run(void) {
             else if (t==WIN_CALC) render_calc(w);
             else if (t==WIN_EDITOR) render_editor(w);
             else if (t==WIN_PKG) render_pkg(w);
+            else if (t==WIN_BROWSER) render_browser(w);
         }
 
         gui_draw_taskbar();
@@ -1588,6 +1672,25 @@ void gui_run(void) {
                 } else if (editor_col < EDIT_COLS-1) {
                     editor_lines[editor_row][editor_col++] = key;
                     editor_lines[editor_row][editor_col]   = 0;
+                }
+            } else if (top == WIN_BROWSER) {
+                if (browser_editing) {
+                    if (key == '\n') {
+                        browser_go();
+                    } else if (key == '\b') {
+                        int n = (int)kstrlen(browser_urlbar);
+                        if (n > 0) browser_urlbar[n-1] = 0;
+                    } else if (key >= 32 && (uint8_t)key < 127) {
+                        int n = (int)kstrlen(browser_urlbar);
+                        if (n < BROWSER_URL_MAX-1) { browser_urlbar[n] = key; browser_urlbar[n+1] = 0; }
+                    }
+                } else {
+                    /* no scroll wheel on this OS's PS/2 mouse driver - up/
+                       down arrows scroll a line, space a page, same as a
+                       pager would. */
+                    if (key == KEY_UP) { if (browser_scroll > 0) browser_scroll--; }
+                    else if (key == KEY_DOWN) browser_scroll++;
+                    else if (key == ' ') browser_scroll += 15;
                 }
             }
         }
@@ -1650,6 +1753,8 @@ void gui_run(void) {
                     editor_handle_click(w, mx, my);
                 } else if (hit == WIN_PKG) {
                     pkg_handle_click(w, mx, my);
+                } else if (hit == WIN_BROWSER) {
+                    browser_handle_click(w, mx, my);
                 }
             } else if (my < 10 && mx < 33) {
                 launcher_open = 1;
@@ -1668,7 +1773,8 @@ void gui_run(void) {
                 else if (iconidx==3) wm_open(WIN_CALC,    480, 500, 190, 230);
                 else if (iconidx==4) wm_open(WIN_EDITOR,   40, 500, 420, 230);
                 else if (iconidx==5) wm_open(WIN_PKG,     690, 500, 300, 230);
-                else if (iconidx==6) running = 0;
+                else if (iconidx==6) wm_open(WIN_BROWSER, 260,  60, 500, 420);
+                else if (iconidx==7) running = 0;
             }
         }
 
