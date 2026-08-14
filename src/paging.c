@@ -78,9 +78,12 @@ uint32_t pmm_total(void) { return pmm_total_frames; }
 
 static uint32_t page_dir[PAGE_ENTRIES] __attribute__((aligned(PAGE_SIZE)));
 
-#define NUM_PREINIT_TABLES 4
-static uint32_t kern_tables[NUM_PREINIT_TABLES][PAGE_ENTRIES]
+/* Covers up to 256MB (matches PMM_MAX_FRAMES) - paging_init() only uses as
+   many of these as the machine's actual RAM needs, see num_kern_tables. */
+#define MAX_PREINIT_TABLES 64
+static uint32_t kern_tables[MAX_PREINIT_TABLES][PAGE_ENTRIES]
                             __attribute__((aligned(PAGE_SIZE)));
+static int num_kern_tables = 4;
 
 static inline void load_cr3(uint32_t dir) {
     __asm__ volatile ("mov %0, %%cr3" :: "r"(dir) : "memory");
@@ -179,7 +182,25 @@ void paging_init(uint32_t mem_kb) {
     pmm_init(mem_kb);
     kmemset(page_dir, 0, sizeof(page_dir));
 
-    for (int t = 0; t < NUM_PREINIT_TABLES; t++) {
+    /* Identity-map ALL physical RAM at boot, not just a fixed 16MB (4
+       tables) - pmm_alloc() hands out frames anywhere up to mem_kb, and a
+       lot of kernel code (paging_clone_dir() in particular) treats
+       whatever pmm_alloc() returns as a directly-dereferenceable kernel
+       pointer ((void*)phys), relying on that identity mapping already
+       being there. With only 16MB mapped, that assumption silently held
+       right up until enough physical memory had actually been consumed to
+       push pmm_alloc() past the 16MB mark - real, reproducible bug: a
+       second fork()+execve() cycle (the first already eats several MB
+       between the clone, the ELF pages and both stacks) reliably crossed
+       that boundary and kmemcpy'd straight into unmapped memory, page
+       faulting at exactly CR2=0x1000000. */
+    uint32_t table_bytes = 4u * 1024 * 1024;
+    uint32_t needed = (mem_kb * 1024 + table_bytes - 1) / table_bytes;
+    if (needed < 4) needed = 4;
+    if (needed > MAX_PREINIT_TABLES) needed = MAX_PREINIT_TABLES;
+    num_kern_tables = (int)needed;
+
+    for (int t = 0; t < num_kern_tables; t++) {
         kmemset(kern_tables[t], 0, PAGE_SIZE);
         for (int p = 0; p < PAGE_ENTRIES; p++) {
             uint32_t phys = (uint32_t)(t * PAGE_ENTRIES + p) * PAGE_SIZE;
@@ -453,8 +474,30 @@ uint32_t paging_clone_dir(void) {
            sharing the exact same physical page table entries and each
            exec()/fork() corrupts whichever other process is still running
            there. Give it the same full deep-copy treatment as user stack
-           (i>=256) instead of a raw pointer share. */
-        if (i < 256 && i != 1) {
+           (i>=256) instead of a raw pointer share.
+
+           PDE 255 needs the exact same treatment and was missed: the user
+           stack is ELF_USER_STACK_TOP=0x40000000 (exactly 1GB) growing
+           DOWN, so it actually lives at virt 0x3FFFC000-0x3FFFFFFF - PDE
+           255 (1GB / 4MB - 1), one short of the ">=256" boundary this
+           function assumed was "the private per-process range". Real,
+           reproducible bug this caused: fork() alone (child never touching
+           its stack pages beyond what it inherited) happened not to
+           corrupt anything since parent and child just shared the same
+           physical stack pages read-mostly - but execve() unconditionally
+           remaps fresh stack pages (paging_map() + zeroing) into whatever
+           PDE 255 points to, and since it was ALIASED (shared pointer to
+           the SAME page table as the parent's), a forked child that
+           execve()'d silently overwrote the PARENT's live stack mappings
+           out from under it. Confirmed with a hardware watchpoint: kush's
+           own saved-return-address stack slot flipped from a valid value
+           to 0 at the exact moment its execve()'d child (hello.elf)
+           zeroed its own fresh stack page - explains the long-standing
+           "return to ring3 after waitpid corrupts" bug byte-for-byte
+           (kush's own code was still fully correct and its iret frame was
+           always intact; its *stack contents* underneath got silently
+           swapped out by an unrelated process). */
+        if (i < 256 && i != 1 && i != 255) {
             new_dir[i] = page_dir[i];
         } else {
             uint32_t tbl_phys = page_dir[i] & ~0xFFF;
@@ -481,7 +524,7 @@ uint32_t paging_clone_dir(void) {
 void paging_free_user(uint32_t dir_phys) {
     uint32_t *dir = (uint32_t *)dir_phys;
     for (int i = 0; i < PAGE_ENTRIES; i++) {
-        if (i != 1 && i < 256) continue; /* only PDE 1 + i>=256 are ever privately owned, see paging_clone_dir */
+        if (i != 1 && i != 255 && i < 256) continue; /* only PDE 1, PDE 255 (user stack) + i>=256 are ever privately owned, see paging_clone_dir */
         if (!dir[i]) continue;
         uint32_t tbl_phys = dir[i] & ~0xFFF;
         uint32_t *tbl = (uint32_t *)tbl_phys;
