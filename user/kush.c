@@ -598,14 +598,15 @@ static int do_help(char *argv[], int argc) {
     return 0;
 }
 
-/* Job control: background (&), jobs/fg/bg. Scoped to single, non-piped
-   external commands (the do_exec() fork+execve path) - builtins run
-   in-process with no fork of their own, so backgrounding one wouldn't
-   actually do anything but block the shell exactly as if it weren't
-   backgrounded; run_pipeline() only sets g_bg_next for the un-piped,
-   single-command case, and do_exec() is the only place that consumes it
-   (silently ignored for builtins, same as a "&" on a bare shell keyword in
-   a real shell being pointless). */
+/* Job control: background (&), jobs/fg/bg/wait. A single external command
+   backgrounds via do_exec() just skipping its own waitpid (g_bg_next,
+   set by run_pipeline()'s un-piped single-command path). An N-stage
+   pipeline ("a | b &") has no single do_exec() fork to skip - run_pipeline()
+   forks its own whole driver once instead and backgrounds *that* (see the
+   nparts>1 branch). Builtins alone (no external command anywhere in the
+   line) still can't usefully be backgrounded - they run in-process with
+   no fork of their own - a bare "&" on one is silently a no-op, same as
+   in a real shell backgrounding a shell keyword. */
 #define KUSH_MAX_JOBS 8
 typedef struct {
     int  used;
@@ -905,13 +906,31 @@ static int dispatch_one(char *argv[], int argc) {
    operator, same as split()'s space-only tokenizing - "cmd>file" with no
    spaces isn't recognized, only "cmd > file". */
 /* Strips a trailing bare "&" token (background job marker) off argv, same
-   in-place-compaction style as parse_redir() below. Only checked on the
-   un-piped single-command path in run_pipeline() - see the job-control
-   comment above do_exec() for why pipelines and builtins don't get this. */
+   in-place-compaction style as parse_redir() below. Used on the un-piped
+   single-command path in run_pipeline() - do_exec() backgrounds those by
+   skipping its own waitpid. N-stage pipelines get backgrounded a
+   different way (see strip_bg_str() and the nparts>1 branch further
+   down) since there's no single do_exec() fork to skip there. */
 static int strip_bg(char *argv[], int *argc) {
     if (*argc > 0 && !strcmp(argv[*argc-1], "&")) {
         (*argc)--;
         argv[*argc] = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* Same job as strip_bg() above but works on the raw, not-yet-split text of
+   a pipeline's last stage - "&" has to be its own whitespace-delimited
+   token, not just a trailing character (so a filename ending in "&"
+   through redirection isn't mistaken for one). */
+static int strip_bg_str(char *s) {
+    int len = (int)strlen(s);
+    while (len > 0 && s[len-1] == ' ') len--;
+    if (len > 0 && s[len-1] == '&' && (len == 1 || s[len-2] == ' ')) {
+        len--;
+        while (len > 0 && s[len-1] == ' ') len--;
+        s[len] = 0;
         return 1;
     }
     return 0;
@@ -1095,6 +1114,14 @@ static int run_pipeline(char *line) {
     expand_alias(expanded, CMD_MAX);
     line = expanded;
 
+    /* Snapshot before the '|' tokenizer below starts overwriting bytes of
+       `line` with NULs - only actually used as a job's display name if
+       this turns out to be a backgrounded N-stage pipeline, but cheap
+       enough (CMD_MAX=256) to always take. */
+    char pipeline_src[CMD_MAX];
+    strncpy(pipeline_src, line, sizeof(pipeline_src)-1);
+    pipeline_src[sizeof(pipeline_src)-1] = 0;
+
     char *parts[8]; int nparts = 0;
     char *p = line;
     parts[nparts++] = p;
@@ -1153,6 +1180,38 @@ static int run_pipeline(char *line) {
         if (out_fd >= 0) close(out_fd);
         if (in_fd  >= 0) close(in_fd);
         return ret;
+    }
+
+    /* Whole-pipeline background ("a | b &"): unlike the single-command
+       case, there's no single do_exec() fork here to just skip the wait
+       on - a pipeline's stages already run through this same function
+       sequentially (see the loop below), so instead the whole driver
+       forks *itself* once. The child runs the stage loop exactly as the
+       foreground case would and exits with the result; the parent (the
+       interactive kush the user is typing into) registers the forked pid
+       as a job and returns immediately without touching the stage loop
+       at all. This nests fork() one level deeper than usual - each
+       stage's do_exec() still forks its own child from *inside* this
+       already-forked pipeline driver - but that's the same fork/execve/
+       waitpid path already verified solid, just invoked from a process
+       that itself came from fork() instead of from kush's original pid. */
+    int pipeline_bg = strip_bg_str(parts[nparts-1]);
+    if (pipeline_bg) {
+        /* pipeline_src was snapshotted before the "&" got stripped off
+           parts[] above - strip it here too so the job table shows the
+           bare pipeline ("ls /disk | grep") instead of trailing "&". */
+        strip_bg_str(pipeline_src);
+        int pid = sys_fork();
+        if (pid < 0) { fputs("kush: fork failed\n"); return 1; }
+        if (pid != 0) {
+            int jid = job_add(pid, pipeline_src);
+            printf("[%d] %d\n", jid, pid);
+            return 0;
+        }
+        /* child falls through to the normal stage loop below, then must
+           exit (not return) at the bottom - it's a forked copy of the
+           whole shell, returning would drop back into the interactive
+           read loop as a second kush fighting over the same console. */
     }
 
     /* N-stage pipeline (a|b|c|...). Builtins run in-process (no fork), so
@@ -1227,6 +1286,7 @@ static int run_pipeline(char *line) {
     /* Real pipeline exit status: the last stage's, not always 0 - so
        `if a | b` (used heavily by scripts, e.g. `if cmd | grep pat`)
        actually reflects whether the pipeline succeeded. */
+    if (pipeline_bg) exit(last_ret);
     return last_ret;
 }
 
