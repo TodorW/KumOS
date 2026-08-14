@@ -28,6 +28,7 @@
 #include "users.h"
 #include "dns.h"
 #include "tls.h"
+#include "browser.h"
 #include "speaker.h"
 #include "dmesg.h"
 #include "dhcp.h"
@@ -315,6 +316,23 @@ static void cmd_https(const char *args) {
     vga_putchar('\n');
     tls_close(tls);
     kfree(tls);
+}
+
+/* CLI front-end for browser.c's fetch+HTML-to-text pass (the same code
+   the GUI's kubrowser window uses) - a real command in its own right for
+   a quick page-to-text read without opening the GUI, not just a test
+   hook, though it did double as the fastest way to verify the HTML
+   parser without fighting QEMU's mouse automation. */
+static void cmd_fetch(const char *args) {
+    if (!*args) { vga_puts("Usage: fetch <url>\n"); return; }
+    vga_puts("Fetching...\n");
+    int r = browser_navigate(args);
+    kprintf("%s: %s\n\n", browser_status(), browser_title());
+    if (r == 0) {
+        int n = browser_line_count();
+        for (int i = 0; i < n; i++) { vga_puts(browser_line_at(i)); vga_putchar('\n'); }
+        kprintf("\n(%d lines)\n", n);
+    }
 }
 
 static int pkg_str_contains(const char *hay, const char *needle) {
@@ -1104,6 +1122,7 @@ static void dispatch(const char *line) {
     else if(kstrcmp(cmd,"mmap")==0){ cmd_mmap(rest); }
     else if(kstrcmp(cmd,"pkg")==0){ cmd_pkg(rest); }
     else if(kstrcmp(cmd,"https")==0){ cmd_https(rest); }
+    else if(kstrcmp(cmd,"fetch")==0){ cmd_fetch(rest); }
     else if(kstrcmp(cmd,"cpuinfo")==0){ cmd_cpuinfo(); }
     else if(kstrcmp(cmd,"irqinfo")==0){ cmd_irqinfo(); }
     else if(kstrcmp(cmd,"ifconfig")==0) {
