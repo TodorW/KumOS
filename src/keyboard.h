@@ -30,4 +30,9 @@ int keyboard_has_input(void);
    catches the byte when the waited-on child isn't itself mid-read. */
 int keyboard_check_ctrlc(void);
 
+/* Same as keyboard_check_ctrlc() but for Ctrl+Z (ASCII 26/SUB) - used by
+   sched_waitstatus() to let Ctrl+Z stop a foreground job instead of
+   killing it. */
+int keyboard_check_ctrlz(void);
+
 #endif

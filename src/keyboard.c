@@ -382,3 +382,21 @@ int keyboard_check_ctrlc(void) {
     }
     return 0;
 }
+
+int keyboard_check_ctrlz(void) {
+    /* Same scan-and-requeue approach as keyboard_check_ctrlc() above, just
+       for Ctrl+Z (ASCII 26/SUB) instead of Ctrl+C - process_scancode()
+       already turns Ctrl+letter into the real control code, so this is
+       purely a "is byte 26 sitting in the queue" check. */
+    char c = poll_once();
+    if (c == 26) return 1;
+    if (c) { btail = (btail - 1 + KB_BUF) % KB_BUF; buf[btail] = c; }
+
+    for (int idx = btail; idx != bhead; idx = (idx+1)%KB_BUF) {
+        if (buf[idx] == 26) {
+            btail = (idx+1) % KB_BUF;
+            return 1;
+        }
+    }
+    return 0;
+}
