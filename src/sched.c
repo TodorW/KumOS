@@ -375,7 +375,10 @@ int sched_waitstatus(int pid, int *exit_code) {
         if (!found) return 0;
 
         if (keyboard_check_ctrlc()) signal_send(pid, SIGINT);
-        if (keyboard_check_ctrlz()) signal_send(pid, SIGSTOP);
+        /* SIGTSTP, not SIGSTOP - Ctrl+Z's stop has to be the catchable/
+           ignorable one (real Unix convention); SIGSTOP stays reserved for
+           an unconditional `kill -19` that can't be dodged. */
+        if (keyboard_check_ctrlz()) signal_send(pid, SIGTSTP);
 
         sched_yield();
     }
