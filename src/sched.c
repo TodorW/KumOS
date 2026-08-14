@@ -279,6 +279,7 @@ static const char *tstate(task_state_t s) {
         case TASK_SLEEPING: return "SLEEP";
         case TASK_DEAD:     return "DEAD ";
         case TASK_ZOMBIE:   return "ZOMBI";
+        case TASK_STOPPED:  return "STOP ";
         default:            return "?    ";
     }
 }
@@ -342,6 +343,48 @@ int sched_waitpid(int pid) {
 
         sched_yield();
     }
+}
+
+/* Like sched_waitpid() but also polls for Ctrl+Z (job-control stop) instead
+   of only Ctrl+C, and stops blocking (without reaping) if the child gets
+   stopped rather than just when it exits. Returns 1 if the child exited
+   (exit_code filled in, task reaped to TASK_DEAD - same as sched_waitpid()),
+   2 if the child is now TASK_STOPPED (job control - caller keeps the pid
+   around for a later fg/bg, nothing reaped), 0 if no such pid exists. */
+int sched_waitstatus(int pid, int *exit_code) {
+    while (1) {
+        int found = 0;
+        for (int i = 0; i < task_count; i++) {
+            if (tasks[i].pid != pid) continue;
+            found = 1;
+            if (tasks[i].state == TASK_ZOMBIE || tasks[i].state == TASK_DEAD) {
+                if (exit_code) *exit_code = tasks[i].exit_code;
+                tasks[i].state = TASK_DEAD;
+                return 1;
+            }
+            if (tasks[i].state == TASK_STOPPED) return 2;
+            break;
+        }
+        if (!found) return 0;
+
+        if (keyboard_check_ctrlc()) signal_send(pid, SIGINT);
+        if (keyboard_check_ctrlz()) signal_send(pid, SIGSTOP);
+
+        sched_yield();
+    }
+}
+
+/* Non-blocking job-control status for `jobs`/fg/bg to display without
+   reaping: 0 = running/ready/sleeping, 1 = stopped, 2 = exited (zombie,
+   not yet reaped by wait/waitpid/waitstatus), -1 = no such task. */
+int sched_procstate(int pid) {
+    for (int i = 0; i < task_count; i++) {
+        if (tasks[i].pid != pid) continue;
+        if (tasks[i].state == TASK_STOPPED) return 1;
+        if (tasks[i].state == TASK_ZOMBIE || tasks[i].state == TASK_DEAD) return 2;
+        return 0;
+    }
+    return -1;
 }
 
 int sched_wait(int *exit_code) {

@@ -19,6 +19,7 @@ typedef enum {
     TASK_SLEEPING = 2,
     TASK_DEAD     = 3,
     TASK_ZOMBIE   = 4,
+    TASK_STOPPED  = 5,
 } task_state_t;
 
 typedef struct {
@@ -54,6 +55,8 @@ task_t *sched_task_at(int index);
 int     sched_current_index(void);
 int     sched_waitpid(int pid);
 int     sched_wait(int *exit_code);
+int     sched_waitstatus(int pid, int *exit_code);
+int     sched_procstate(int pid);
 void    sched_list(void);
 
 #endif
