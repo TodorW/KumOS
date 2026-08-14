@@ -318,17 +318,43 @@ static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_
        we'd even committed to replacing it. */
     if (elf_validate_disk(upper) != 0) return (uint32_t)-1;
 
+    /* argv_addr points into the CALLER's (about-to-be-replaced) address
+       space - must be read before that address space goes away below, or
+       it's read back through the wrong (fresh, cloned-from-shared-template)
+       page tables, which don't have the old user stack mapped at all. Only
+       snapshotting the pointer VALUES here (nothing downstream of execve
+       ever dereferences these as strings, just copies the pointers around
+       on fork()), so no need to copy the actual argument text anywhere. */
+    char *argv_snapshot[16]; int argc_snapshot = 0;
+    if (argv_addr) {
+        char **argv = (char **)argv_addr;
+        while (argv[argc_snapshot] && argc_snapshot < 15) {
+            argv_snapshot[argc_snapshot] = argv[argc_snapshot];
+            argc_snapshot++;
+        }
+    }
+    argv_snapshot[argc_snapshot] = 0;
+
     task_t *cur = sched_current();
 
-    if (cur->page_dir_phys) {
-        paging_free_user(cur->page_dir_phys);
-        cur->page_dir_phys = 0;
-    }
-
+    /* Build and switch to the replacement directory BEFORE freeing the
+       old one - the old one is still the LIVE CR3 at this point. Freeing
+       it first (the old order here) returned its physical pages to the
+       allocator while the CPU was still actively running on them; the
+       very next pmm_alloc() (for the new directory/page tables built two
+       lines later) could then hand back one of those same pages, and
+       zeroing/overwriting it out from under the still-current mapping is
+       exactly the kind of corruption that made a *different*, unrelated
+       task (whichever was next to touch that physical page) crash with a
+       nonsensical-looking EIP/ESP - this is what was actually behind the
+       long-standing "return to ring3 after waitpid corrupts" bug, not the
+       scheduler/switch_context mechanism itself. */
+    uint32_t old_dir = cur->page_dir_phys;
     uint32_t new_dir = paging_clone_dir();
     if (!new_dir) return (uint32_t)-1;
     cur->page_dir_phys = new_dir;
     paging_switch(new_dir);
+    if (old_dir) paging_free_user(old_dir);
 
     elf_load_result_t r2 = elf_load_disk(upper);
     /* Was paging_switch(0) here - CR3=0 is not a valid directory and would
@@ -339,14 +365,8 @@ static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_
     if (r2.error != 0) return (uint32_t)-1;
 
     kstrcpy(cur->name, upper);
-    cur->argc = 0;
-    if (argv_addr) {
-        char **argv = (char **)argv_addr;
-        while (argv[cur->argc] && cur->argc < 15) {
-            cur->argv[cur->argc] = argv[cur->argc];
-            cur->argc++;
-        }
-    }
+    cur->argc = argc_snapshot;
+    for (int j = 0; j < argc_snapshot; j++) cur->argv[j] = argv_snapshot[j];
     cur->argv[cur->argc] = 0;
 
     uint32_t user_stack_top = 0x40000000;
