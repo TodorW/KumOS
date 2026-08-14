@@ -28,6 +28,26 @@ int signal_send(int pid, int sig) {
         return 0;
     }
 
+    /* SIGSTOP/SIGCONT are job control, not deliverable/catchable signals -
+       they act on the scheduler's task state directly instead of going
+       through the pending/handler machinery below, same as real Unix (a
+       process can't ignore or handle SIGSTOP). A stopped task never runs
+       signal_check() again on its own (pick_next() only schedules READY/
+       RUNNING tasks), so SIGCONT has to flip it back to READY here rather
+       than relying on the target to notice a pending bit. */
+    if (sig == SIGSTOP) {
+        task_t *t = sched_get_task(pid);
+        if (!t) return -1;
+        if (t->state != TASK_ZOMBIE && t->state != TASK_DEAD) t->state = TASK_STOPPED;
+        return 0;
+    }
+    if (sig == SIGCONT) {
+        task_t *t = sched_get_task(pid);
+        if (!t) return -1;
+        if (t->state == TASK_STOPPED) t->state = TASK_READY;
+        return 0;
+    }
+
     task_t *t = sched_get_task(pid);
     if (!t) return -1;
 
