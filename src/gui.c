@@ -479,6 +479,20 @@ static void icon_glyph(int x, int y, icon_kind_t kind) {
         }
         break;
     }
+    case ICON_PIANO:
+        gui_rect_fill(x, y+1, 20, 12, C_WHITE);
+        gui_rect(x, y+1, 20, 12, C_DARK_GREY);
+        gui_rect_fill(x+3,  y+1, 3, 8, C_BLACK);
+        gui_rect_fill(x+9,  y+1, 3, 8, C_BLACK);
+        gui_vline(x+6,  y+1, 12, C_DARK_GREY);
+        gui_vline(x+13, y+1, 12, C_DARK_GREY);
+        break;
+    case ICON_2048:
+        gui_rect_fill(x,   y+1, 9, 6,  C_ORANGE);
+        gui_rect_fill(x+11,y+1, 9, 6,  C_YELLOW);
+        gui_rect_fill(x,   y+8, 9, 6,  C_LIGHT_BLUE);
+        gui_rect_fill(x+11,y+8, 9, 6,  C_LIGHT_GREEN);
+        break;
     }
 }
 
@@ -561,7 +575,8 @@ static uint32_t gui_rand(void) {
    (t>=WIN_TERMINAL && t<=WIN_TERMINAL3) work for "is this a terminal". */
 typedef enum {
     WIN_TERMINAL=0, WIN_TERMINAL2=1, WIN_TERMINAL3=2, WIN_FILES=3, WIN_SYSMON=4,
-    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_WRITE=9, WIN_PAINT=10, WIN_SNAKE=11, WIN_COUNT=12
+    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_WRITE=9, WIN_PAINT=10, WIN_SNAKE=11,
+    WIN_PIANO=12, WIN_2048=13, WIN_COUNT=14
 } wintype_t;
 
 typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
@@ -584,6 +599,8 @@ static const char *win_title(int t) {
         case WIN_WRITE:    return "KumWrite";
         case WIN_PAINT:    return "Paint";
         case WIN_SNAKE:    return "Snake";
+        case WIN_PIANO:    return "Piano";
+        case WIN_2048:     return "2048";
     }
     return "";
 }
@@ -767,7 +784,9 @@ void gui_draw_desktop(void) {
     gui_icon(8, ICON_START_Y + 7*ICON_SLOT, "Write", C_PINK,       ICON_NOTE);
     gui_icon(8, ICON_START_Y + 8*ICON_SLOT, "Paint", C_ORANGE,     ICON_PAINT);
     gui_icon(8, ICON_START_Y + 9*ICON_SLOT, "Snake", C_GREEN,      ICON_SNAKE);
-    gui_icon(8, ICON_START_Y + 10*ICON_SLOT, "Exit", C_DARK_GREY,  ICON_EXIT);
+    gui_icon(8, ICON_START_Y + 10*ICON_SLOT, "Piano", C_PURPLE,    ICON_PIANO);
+    gui_icon(8, ICON_START_Y + 11*ICON_SLOT, "2048",  C_ORANGE,    ICON_2048);
+    gui_icon(8, ICON_START_Y + 12*ICON_SLOT, "Exit",  C_DARK_GREY, ICON_EXIT);
 
     gui_printf(52, 18, C_LIGHT_GREY, C_DESKTOP,
                "Click icons to open apps");
@@ -1686,6 +1705,185 @@ static void render_snake(winrec_t *w) {
         gui_puts(cx0, cy0+ch+14, "Arrow keys to steer", C_DARK_GREY, C_WIN_BG);
 }
 
+/* Piano - click and hold a key to sound it via the PC speaker
+   (speaker_on()/speaker_off() are non-blocking register pokes, unlike
+   speaker_beep() which sleeps for a fixed duration - exactly the
+   press-and-hold-to-sustain interaction a piano key needs, no timing
+   assumptions baked in). One octave, white keys only (no sharps/flats -
+   this is a demo of "the GUI can drive real hardware audio", not a
+   real instrument). */
+#define PIANO_KEYS 8
+static const uint32_t piano_freqs[PIANO_KEYS] = {262,294,330,349,392,440,494,523};
+static const char     piano_names[PIANO_KEYS] = {'C','D','E','F','G','A','B','C'};
+static int piano_active = -1;
+
+#define PIANO_KW 26
+#define PIANO_KH 100
+
+static void render_piano(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "Piano");
+    int cx0 = w->x+6, cy0 = w->y+16;
+    for (int i=0;i<PIANO_KEYS;i++) {
+        int kx = cx0 + i*(PIANO_KW+2);
+        uint8_t c = (piano_active==i) ? C_LIGHT_BLUE : C_WHITE;
+        gui_rect_fill(kx, cy0, PIANO_KW, PIANO_KH, c);
+        gui_rect(kx, cy0, PIANO_KW, PIANO_KH, C_DARK_GREY);
+        char lbl[2] = { piano_names[i], 0 };
+        gui_puts(kx+9, cy0+PIANO_KH-14, lbl, C_BLACK, c);
+    }
+    gui_puts(cx0, cy0+PIANO_KH+8, "Click and hold a key", C_DARK_GREY, C_WIN_BG);
+}
+
+static void piano_handle_click(winrec_t *w, int mx, int my) {
+    int cx0 = w->x+6, cy0 = w->y+16;
+    for (int i=0;i<PIANO_KEYS;i++) {
+        int kx = cx0 + i*(PIANO_KW+2);
+        if (point_in(mx, my, kx, cy0, PIANO_KW, PIANO_KH)) {
+            piano_active = i;
+            speaker_on(piano_freqs[i]);
+            return;
+        }
+    }
+}
+
+/* 2048 - the classic slide-and-merge puzzle. Distinct game mechanics
+   from Snake (merging instead of movement/collision), same arrow-key
+   input model. board[r][c]==0 means empty; anything else is the actual
+   tile value (2, 4, 8, ...). */
+static int g2048_board[4][4];
+static int g2048_score = 0;
+static int g2048_over  = 0;
+static int g2048_started = 0;
+
+static void g2048_spawn(void) {
+    int er[16], ec[16], n=0;
+    for (int r=0;r<4;r++) for (int c=0;c<4;c++)
+        if (!g2048_board[r][c]) { er[n]=r; ec[n]=c; n++; }
+    if (!n) return;
+    int pick = (int)(gui_rand() % (uint32_t)n);
+    g2048_board[er[pick]][ec[pick]] = (gui_rand()%10==0) ? 4 : 2;
+}
+
+static void g2048_reset(void) {
+    for (int r=0;r<4;r++) for (int c=0;c<4;c++) g2048_board[r][c] = 0;
+    g2048_score = 0; g2048_over = 0;
+    g2048_spawn(); g2048_spawn();
+}
+
+/* Compresses out zeros, merges equal adjacent pairs (each tile merges at
+   most once per move - the classic 2048 rule, why this can't just be a
+   sort), pads the rest back out with zeros. Returns whether the line
+   actually changed, so the caller only spawns a new tile / re-checks
+   game-over on moves that did something (arrow keys that don't move
+   anything shouldn't cost the player a free tile). */
+static int g2048_line_merge(int line[4]) {
+    int tmp[4], n=0;
+    for (int i=0;i<4;i++) if (line[i]) tmp[n++] = line[i];
+    int out[4] = {0,0,0,0}, oi=0;
+    for (int i=0;i<n;i++) {
+        if (i+1<n && tmp[i]==tmp[i+1]) {
+            out[oi] = tmp[i]*2;
+            g2048_score += out[oi];
+            oi++; i++;
+        } else {
+            out[oi++] = tmp[i];
+        }
+    }
+    int changed = 0;
+    for (int i=0;i<4;i++) { if (out[i]!=line[i]) changed=1; line[i]=out[i]; }
+    return changed;
+}
+
+static int g2048_no_moves_left(void) {
+    for (int r=0;r<4;r++) for (int c=0;c<4;c++) {
+        if (!g2048_board[r][c]) return 0;
+        if (c<3 && g2048_board[r][c]==g2048_board[r][c+1]) return 0;
+        if (r<3 && g2048_board[r][c]==g2048_board[r+1][c]) return 0;
+    }
+    return 1;
+}
+
+/* dir: 0=left, 1=right, 2=up, 3=down. Builds each row/column as a 4-
+   element line in the order tiles should slide toward (index 0 = the
+   leading edge), merges it, writes it back in the same order it came
+   from - keeping the extraction/write-back symmetric like this is what
+   makes one merge function work for all four directions instead of
+   needing bespoke logic per direction. */
+static void g2048_move(int dir) {
+    int changed_any = 0;
+    if (dir==0 || dir==1) {
+        for (int r=0;r<4;r++) {
+            int line[4];
+            for (int c=0;c<4;c++) line[c] = g2048_board[r][dir==0 ? c : 3-c];
+            if (g2048_line_merge(line)) changed_any = 1;
+            for (int c=0;c<4;c++) g2048_board[r][dir==0 ? c : 3-c] = line[c];
+        }
+    } else {
+        for (int c=0;c<4;c++) {
+            int line[4];
+            for (int r=0;r<4;r++) line[r] = g2048_board[dir==2 ? r : 3-r][c];
+            if (g2048_line_merge(line)) changed_any = 1;
+            for (int r=0;r<4;r++) g2048_board[dir==2 ? r : 3-r][c] = line[r];
+        }
+    }
+    if (changed_any) {
+        g2048_spawn();
+        if (g2048_no_moves_left()) g2048_over = 1;
+    }
+}
+
+static uint8_t g2048_tile_color(int v) {
+    switch (v) {
+        case 0:    return C_LIGHT_GREY;
+        case 2:    return C_WHITE;
+        case 4:    return C_YELLOW;
+        case 8:    return C_ORANGE;
+        case 16:   return C_LIGHT_RED;
+        case 32:   return C_RED;
+        case 64:   return C_PURPLE;
+        case 128:  return C_LIGHT_BLUE;
+        case 256:  return C_LIGHT_GREEN;
+        case 512:  return C_GREEN;
+        case 1024: return C_TEAL;
+        default:   return C_NAVY;
+    }
+}
+
+#define G2048_CELL 44
+#define G2048_GAP   4
+
+static void render_2048(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "2048");
+    if (!g2048_started) { g2048_reset(); g2048_started = 1; }
+
+    int cx0 = w->x+6, cy0 = w->y+16;
+    for (int r=0;r<4;r++) {
+        for (int c=0;c<4;c++) {
+            int v = g2048_board[r][c];
+            int tx = cx0 + c*(G2048_CELL+G2048_GAP);
+            int ty = cy0 + r*(G2048_CELL+G2048_GAP);
+            gui_rect_fill(tx, ty, G2048_CELL, G2048_CELL, g2048_tile_color(v));
+            gui_rect(tx, ty, G2048_CELL, G2048_CELL, C_WIN_BORDER);
+            if (v) {
+                char nb[8]; kitoa((uint32_t)v, nb, 10);
+                int tw = (int)kstrlen(nb)*8;
+                gui_puts(tx+(G2048_CELL-tw)/2, ty+(G2048_CELL-8)/2, nb,
+                         v<=4 ? C_BLACK : C_WHITE, g2048_tile_color(v));
+            }
+        }
+    }
+
+    int by = cy0 + 4*(G2048_CELL+G2048_GAP) + 4;
+    char scorebuf[24] = "Score: ";
+    char nb[12]; kitoa((uint32_t)g2048_score, nb, 10);
+    kstrcat(scorebuf, nb);
+    gui_puts(cx0, by, scorebuf, C_WHITE, C_WIN_BG);
+    if (g2048_over)
+        gui_puts(cx0, by+10, "Game over - press R", C_LIGHT_RED, C_WIN_BG);
+    else
+        gui_puts(cx0, by+10, "Arrow keys to slide", C_DARK_GREY, C_WIN_BG);
+}
+
 static int  pkg_selected = -1;
 static char pkg_status[24] = "";
 
@@ -1874,6 +2072,8 @@ static int launcher_build(launch_item_t *items, int max) {
     if (n<max) items[n++] = (launch_item_t){"KumWrite",       ICON_NOTE,    WIN_WRITE,    0, 0};
     if (n<max) items[n++] = (launch_item_t){"Paint",          ICON_PAINT,   WIN_PAINT,    0, 0};
     if (n<max) items[n++] = (launch_item_t){"Snake",          ICON_SNAKE,   WIN_SNAKE,    0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Piano",          ICON_PIANO,   WIN_PIANO,    0, 0};
+    if (n<max) items[n++] = (launch_item_t){"2048",           ICON_2048,    WIN_2048,     0, 0};
     int total = pkgwin_total();
     for (int i=0;i<total && n<max;i++) {
         if (!pkgwin_installed(i)) continue;
@@ -1899,6 +2099,8 @@ static void launcher_open_wintype(int t) {
         case WIN_WRITE:    wm_open(WIN_WRITE,   300, 100, 520, 400);       break;
         case WIN_PAINT:    wm_open(WIN_PAINT,   340,  80, 340, 260);       break;
         case WIN_SNAKE:    wm_open(WIN_SNAKE,   400, 200, 220, 216);       break;
+        case WIN_PIANO:    wm_open(WIN_PIANO,   420, 300, 240, 150);       break;
+        case WIN_2048:     wm_open(WIN_2048,    460, 150, 220, 260);       break;
     }
 }
 
@@ -2011,6 +2213,8 @@ void gui_run(void) {
             else if (t==WIN_WRITE) render_write(w);
             else if (t==WIN_PAINT) render_paint(w);
             else if (t==WIN_SNAKE) render_snake(w);
+            else if (t==WIN_PIANO) render_piano(w);
+            else if (t==WIN_2048) render_2048(w);
         }
 
         gui_draw_taskbar();
@@ -2120,6 +2324,12 @@ void gui_run(void) {
                 else if (key == KEY_DOWN  && snake_dy==0) { snake_dx=0;  snake_dy=1;  }
                 else if (key == KEY_LEFT  && snake_dx==0) { snake_dx=-1; snake_dy=0;  }
                 else if (key == KEY_RIGHT && snake_dx==0) { snake_dx=1;  snake_dy=0;  }
+            } else if (top == WIN_2048) {
+                if (g2048_over && (key=='r' || key=='R')) g2048_reset();
+                else if (!g2048_over && key == KEY_LEFT)  g2048_move(0);
+                else if (!g2048_over && key == KEY_RIGHT) g2048_move(1);
+                else if (!g2048_over && key == KEY_UP)    g2048_move(2);
+                else if (!g2048_over && key == KEY_DOWN)  g2048_move(3);
             }
         }
 
@@ -2187,6 +2397,8 @@ void gui_run(void) {
                     write_handle_click(w, mx, my);
                 } else if (hit == WIN_PAINT) {
                     paint_handle_click(w, mx, my);
+                } else if (hit == WIN_PIANO) {
+                    piano_handle_click(w, mx, my);
                 }
             } else if (my < 10 && mx < 33) {
                 launcher_open = 1;
@@ -2209,7 +2421,9 @@ void gui_run(void) {
                 else if (iconidx==7) wm_open(WIN_WRITE,   300, 100, 520, 400);
                 else if (iconidx==8) wm_open(WIN_PAINT,   340,  80, 340, 260);
                 else if (iconidx==9) wm_open(WIN_SNAKE,   400, 200, 220, 216);
-                else if (iconidx==10) running = 0;
+                else if (iconidx==10) wm_open(WIN_PIANO,  420, 300, 240, 150);
+                else if (iconidx==11) wm_open(WIN_2048,   460, 150, 220, 260);
+                else if (iconidx==12) running = 0;
             }
         }
 
@@ -2249,6 +2463,16 @@ void gui_run(void) {
                 paint_dot(lx, ly);
         }
         if (!left_now) g_painting = 0;
+
+        /* Piano key release - same "reset a state flag on button-up"
+           shape as painting/dragging/resizing above, just silencing the
+           speaker instead of ending a stroke. Releasing anywhere (not
+           just still over the key) stops the note - simplest correct
+           behavior for a press-and-hold instrument key. */
+        if (!left_now && piano_active >= 0) {
+            speaker_off();
+            piano_active = -1;
+        }
 
         prev_left = left_now;
 
