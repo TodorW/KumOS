@@ -495,7 +495,7 @@ static int gui_pressed(int x, int y, int w, int h) {
    (t>=WIN_TERMINAL && t<=WIN_TERMINAL3) work for "is this a terminal". */
 typedef enum {
     WIN_TERMINAL=0, WIN_TERMINAL2=1, WIN_TERMINAL3=2, WIN_FILES=3, WIN_SYSMON=4,
-    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_COUNT=9
+    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_WRITE=9, WIN_COUNT=10
 } wintype_t;
 
 typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
@@ -515,6 +515,7 @@ static const char *win_title(int t) {
         case WIN_EDITOR:   return "Notepad";
         case WIN_PKG:      return "Packages";
         case WIN_BROWSER:  return "Web";
+        case WIN_WRITE:    return "KumWrite";
     }
     return "";
 }
@@ -695,7 +696,8 @@ void gui_draw_desktop(void) {
     gui_icon(8, ICON_START_Y + 4*ICON_SLOT, "Note",  C_LIGHT_BLUE, ICON_NOTE);
     gui_icon(8, ICON_START_Y + 5*ICON_SLOT, "Pkgs",  C_TEAL,       ICON_PKG);
     gui_icon(8, ICON_START_Y + 6*ICON_SLOT, "Web",   C_LIGHT_BLUE, ICON_BROWSER);
-    gui_icon(8, ICON_START_Y + 7*ICON_SLOT, "Exit",  C_DARK_GREY,  ICON_EXIT);
+    gui_icon(8, ICON_START_Y + 7*ICON_SLOT, "Write", C_PINK,       ICON_NOTE);
+    gui_icon(8, ICON_START_Y + 8*ICON_SLOT, "Exit",  C_DARK_GREY,  ICON_EXIT);
 
     gui_printf(52, 18, C_LIGHT_GREY, C_DESKTOP,
                "Click icons to open apps");
@@ -1325,6 +1327,121 @@ static void editor_handle_click(winrec_t *w, int mx, int my) {
     }
 }
 
+/* KumWrite: Notepad's bigger sibling - real filename field (New/Open/Save
+   against whatever name is typed there, not a fixed NOTES.TXT), a much
+   larger buffer, and a live word/char count. Same row/col text-buffer
+   model as Notepad (proven, so reused rather than reinvented), plus the
+   click-to-edit/navy-border text field pattern kubrowser's URL bar
+   introduced - the two fields are now visually and behaviorally
+   consistent instead of each app inventing its own text-input feel. */
+#define WRITE_ROWS 40
+#define WRITE_COLS 74
+#define WRITE_NAME_MAX 32
+
+static char write_lines[WRITE_ROWS][WRITE_COLS+1];
+static int  write_row = 0, write_col = 0;
+static char write_filename[WRITE_NAME_MAX] = "DOC.TXT";
+static int  write_editing_name = 0;
+static char write_status[24] = "";
+
+static void write_init_buf(void) {
+    for (int i=0;i<WRITE_ROWS;i++) write_lines[i][0] = 0;
+    write_row = 0; write_col = 0;
+}
+
+static void write_counts(int *words, int *chars) {
+    int w = 0, c = 0, in_word = 0;
+    for (int i = 0; i <= write_row; i++) {
+        int len = (i < write_row) ? (int)kstrlen(write_lines[i]) : write_col;
+        for (int j = 0; j < len; j++) {
+            char ch = write_lines[i][j];
+            c++;
+            if (ch == ' ' || ch == '\t') in_word = 0;
+            else if (!in_word) { in_word = 1; w++; }
+        }
+        if (i < write_row) c++;   /* the newline joining this line to the next */
+    }
+    *words = w; *chars = c;
+}
+
+static void render_write(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "KumWrite");
+
+    int cy = w->y + 12;
+    gui_puts(w->x+3, cy+2, "File:", C_DARK_GREY, C_WIN_BG);
+    gui_rect_fill(w->x+34, cy, 120, 12, C_WHITE);
+    gui_rect(w->x+34, cy, 120, 12, write_editing_name ? C_NAVY : C_LIGHT_GREY);
+    gui_puts(w->x+36, cy+2, write_filename, C_BLACK, C_WHITE);
+    if (write_editing_name && (timer_ticks()/50) & 1)
+        gui_rect_fill(w->x+36+(int)kstrlen(write_filename)*8, cy+1, 6, 9, C_LIGHT_GREY);
+
+    gui_button(w->x+158, cy, 36, 12, "New",  gui_pressed(w->x+158, cy, 36, 12));
+    gui_button(w->x+196, cy, 40, 12, "Open", gui_pressed(w->x+196, cy, 40, 12));
+    gui_button(w->x+238, cy, 36, 12, "Save", gui_pressed(w->x+238, cy, 36, 12));
+    cy += 15;
+
+    int content_y0 = cy;
+    int content_h  = w->h - (content_y0 - w->y) - 12;
+    if (content_h < 0) content_h = 0;
+    gui_rect_fill(w->x+1, content_y0, w->w-2, content_h, C_WHITE);
+
+    int rows = content_h / 9;
+    for (int i = 0; i < WRITE_ROWS && i < rows; i++)
+        gui_puts(w->x+3, content_y0+2+i*9, write_lines[i], C_BLACK, C_WHITE);
+    if (!write_editing_name && (timer_ticks()/50) & 1)
+        gui_rect_fill(w->x+3+write_col*8, content_y0+2+write_row*9, 7, 8, C_LIGHT_GREY);
+
+    int words, chars; write_counts(&words, &chars);
+    char statline[64];
+    kstrcpy(statline, write_status);
+    if (!statline[0]) {
+        char nb[12]; kitoa((uint32_t)words, nb, 10);
+        kstrcpy(statline, nb); kstrcat(statline, " words, ");
+        kitoa((uint32_t)chars, nb, 10); kstrcat(statline, nb); kstrcat(statline, " chars");
+    }
+    gui_puts(w->x+3, w->y+w->h-10, statline, C_DARK_GREY, C_WIN_BG);
+}
+
+static void write_handle_click(winrec_t *w, int mx, int my) {
+    int cy = w->y + 12;
+    if (point_in(mx, my, w->x+34, cy, 120, 12)) { write_editing_name = 1; return; }
+    write_editing_name = 0;
+    write_status[0] = 0;
+
+    if (point_in(mx, my, w->x+158, cy, 36, 12)) {
+        write_init_buf();
+        kstrcpy(write_status, "New doc");
+    } else if (point_in(mx, my, w->x+196, cy, 40, 12)) {
+        if (!fat12_mounted()) { kstrcpy(write_status, "No disk"); return; }
+        uint8_t fbuf[WRITE_ROWS*(WRITE_COLS+1)];
+        int n = fat12_read(write_filename, fbuf, sizeof(fbuf)-1);
+        if (n < 0) { kstrcpy(write_status, "Not found"); return; }
+        fbuf[n] = 0;
+        write_init_buf();
+        char *p = (char*)fbuf;
+        while (*p && write_row < WRITE_ROWS) {
+            if (*p == '\n') { write_row++; write_col = 0; p++; continue; }
+            if (write_col < WRITE_COLS-1) {
+                write_lines[write_row][write_col++] = *p;
+                write_lines[write_row][write_col] = 0;
+            }
+            p++;
+        }
+        kstrcpy(write_status, "Loaded!");
+    } else if (point_in(mx, my, w->x+238, cy, 36, 12)) {
+        if (!write_filename[0]) { kstrcpy(write_status, "Need a filename"); return; }
+        char buf[WRITE_ROWS*(WRITE_COLS+1)]; int n=0;
+        for (int i=0;i<=write_row;i++) {
+            const char *p = write_lines[i];
+            while (*p) buf[n++] = *p++;
+            if (i < write_row) buf[n++] = '\n';
+        }
+        if (!fat12_mounted()) kstrcpy(write_status, "No disk");
+        else if (fat12_write(write_filename, buf, (uint32_t)n) == 0) kstrcpy(write_status, "Saved!");
+        else kstrcpy(write_status, "Save failed");
+    }
+}
+
 static int  pkg_selected = -1;
 static char pkg_status[24] = "";
 
@@ -1510,6 +1627,7 @@ static int launcher_build(launch_item_t *items, int max) {
     if (n<max) items[n++] = (launch_item_t){"Notepad",        ICON_NOTE,    WIN_EDITOR,   0, 0};
     if (n<max) items[n++] = (launch_item_t){"Packages",       ICON_PKG,     WIN_PKG,      0, 0};
     if (n<max) items[n++] = (launch_item_t){"Browser",        ICON_BROWSER, WIN_BROWSER,  0, 0};
+    if (n<max) items[n++] = (launch_item_t){"KumWrite",       ICON_NOTE,    WIN_WRITE,    0, 0};
     int total = pkgwin_total();
     for (int i=0;i<total && n<max;i++) {
         if (!pkgwin_installed(i)) continue;
@@ -1532,6 +1650,7 @@ static void launcher_open_wintype(int t) {
         case WIN_EDITOR:   wm_open(WIN_EDITOR,   40, 500, 420, 230);       break;
         case WIN_PKG:      wm_open(WIN_PKG,     690, 500, 300, 230);       break;
         case WIN_BROWSER:  wm_open(WIN_BROWSER, 260,  60, 500, 420);       break;
+        case WIN_WRITE:    wm_open(WIN_WRITE,   300, 100, 520, 400);       break;
     }
 }
 
@@ -1635,6 +1754,7 @@ void gui_run(void) {
             else if (t==WIN_EDITOR) render_editor(w);
             else if (t==WIN_PKG) render_pkg(w);
             else if (t==WIN_BROWSER) render_browser(w);
+            else if (t==WIN_WRITE) render_write(w);
         }
 
         gui_draw_taskbar();
@@ -1713,6 +1833,31 @@ void gui_run(void) {
                     else if (key == KEY_DOWN) browser_scroll++;
                     else if (key == ' ') browser_scroll += 15;
                 }
+            } else if (top == WIN_WRITE) {
+                if (write_editing_name) {
+                    if (key == '\n') {
+                        write_editing_name = 0;
+                    } else if (key == '\b') {
+                        int n = (int)kstrlen(write_filename);
+                        if (n > 0) write_filename[n-1] = 0;
+                    } else if (key >= 32 && (uint8_t)key < 127) {
+                        int n = (int)kstrlen(write_filename);
+                        if (n < WRITE_NAME_MAX-1) { write_filename[n] = key; write_filename[n+1] = 0; }
+                    }
+                } else if (key == '\n') {
+                    if (write_row < WRITE_ROWS-1) {
+                        write_row++; write_col = 0; write_lines[write_row][0] = 0;
+                    }
+                } else if (key == '\b') {
+                    if (write_col > 0) {
+                        write_col--; write_lines[write_row][write_col] = 0;
+                    } else if (write_row > 0) {
+                        write_row--; write_col = (int)kstrlen(write_lines[write_row]);
+                    }
+                } else if (key >= 32 && (uint8_t)key < 127 && write_col < WRITE_COLS-1) {
+                    write_lines[write_row][write_col++] = key;
+                    write_lines[write_row][write_col]   = 0;
+                }
             }
         }
 
@@ -1776,6 +1921,8 @@ void gui_run(void) {
                     pkg_handle_click(w, mx, my);
                 } else if (hit == WIN_BROWSER) {
                     browser_handle_click(w, mx, my);
+                } else if (hit == WIN_WRITE) {
+                    write_handle_click(w, mx, my);
                 }
             } else if (my < 10 && mx < 33) {
                 launcher_open = 1;
@@ -1795,7 +1942,8 @@ void gui_run(void) {
                 else if (iconidx==4) wm_open(WIN_EDITOR,   40, 500, 420, 230);
                 else if (iconidx==5) wm_open(WIN_PKG,     690, 500, 300, 230);
                 else if (iconidx==6) wm_open(WIN_BROWSER, 260,  60, 500, 420);
-                else if (iconidx==7) running = 0;
+                else if (iconidx==7) wm_open(WIN_WRITE,   300, 100, 520, 400);
+                else if (iconidx==8) running = 0;
             }
         }
 
