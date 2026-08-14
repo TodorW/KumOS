@@ -40,8 +40,7 @@ static syscall_regs_t *g_cur_regs;
 static uint32_t sc_exit(uint32_t code, uint32_t b, uint32_t c) {
     (void)b; (void)c;
 
-    sched_exit();
-    (void)code;
+    sched_exit_code((int)code);
     return 0;
 }
 
