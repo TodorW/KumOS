@@ -56,13 +56,16 @@ iso: kumos.bin
 ext2.img:
 	@dd if=/dev/zero of=$@ bs=1M count=8 status=none
 run: iso ext2.img
+	@[ -r /dev/kvm ] || echo "WARNING: /dev/kvm not readable - falling back to software (TCG) emulation, several times slower. The GUI will feel laggy. Usually fixed by adding your user to the 'kvm' group."
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
 	    -boot order=d -cdrom kumos.iso -drive file=disk.img,format=raw,if=ide -drive file=ext2.img,format=raw,if=ide -m 128M -vga std -no-reboot
 run-net: iso ext2.img
+	@[ -r /dev/kvm ] || echo "WARNING: /dev/kvm not readable - falling back to software (TCG) emulation, several times slower. The GUI will feel laggy. Usually fixed by adding your user to the 'kvm' group."
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
 	    -boot order=d -cdrom kumos.iso -drive file=disk.img,format=raw,if=ide -drive file=ext2.img,format=raw,if=ide -m 128M -vga std -no-reboot \
 	    -nic user,model=rtl8139
 run-serial: iso ext2.img
+	@[ -r /dev/kvm ] || echo "WARNING: /dev/kvm not readable - falling back to software (TCG) emulation, several times slower. The GUI will feel laggy. Usually fixed by adding your user to the 'kvm' group."
 	@qemu-system-x86_64 $$([ -r /dev/kvm ] && echo "-enable-kvm") \
 	    -boot order=d -cdrom kumos.iso -drive file=disk.img,format=raw,if=ide -drive file=ext2.img,format=raw,if=ide -m 128M -vga std -no-reboot \
 	    -serial stdio
