@@ -49,9 +49,8 @@ user/%.elf: user/%.c
 	@strip $@
 user-programs: $(USER_PROGS)
 iso: kumos.bin
-	@mkdir -p iso/boot/grub/themes/kumos
+	@mkdir -p iso/boot/grub
 	@cp kumos.bin iso/boot/kumos.bin && cp grub.cfg iso/boot/grub/grub.cfg
-	@cp -r grub-theme/* iso/boot/grub/themes/kumos/
 	@$(GRUB_MKR) -o kumos.iso iso/ 2>/dev/null
 	@echo "ISO: $$(ls -lh kumos.iso | awk '{print $$5}')"
 ext2.img:
