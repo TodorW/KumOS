@@ -43,7 +43,9 @@
 #define SYS_EXECVE   44
 #define SYS_SELECT   45
 #define SYS_POLL     46
-#define SYSCALL_MAX  47
+#define SYS_WAITSTATUS 47
+#define SYS_PROCSTATE  48
+#define SYSCALL_MAX  49
 
 void syscall_init(void);
 

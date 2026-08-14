@@ -316,6 +316,21 @@ static inline int sys_signal(int sig, void (*handler)(int)) {
 static inline int sys_fork(void) {
     return _syscall(20, 0, 0, 0);
 }
+/* Job control: SIGSTOP=19/SIGCONT=18 match src/signal.h. sys_waitstatus()
+   is sys_waitpid() plus Ctrl+Z awareness - returns 1 if the child exited
+   (code written to *status), 2 if the child got stopped instead (job
+   control - not reaped, kush registers it as a background job), 0 if no
+   such pid. sys_procstate() is a non-blocking peek at a pid's job-control
+   state for `jobs`/fg/bg: 0=running, 1=stopped, 2=exited-not-reaped,
+   -1=gone. */
+#define KUSH_SIGCONT 18
+#define KUSH_SIGSTOP 19
+static inline int sys_waitstatus(int pid, int *status) {
+    return _syscall(47, pid, (int)status, 0);
+}
+static inline int sys_procstate(int pid) {
+    return _syscall(48, pid, 0, 0);
+}
 
 static inline int sprintf(char *buf, const char *fmt, ...) {
     int pos=0;

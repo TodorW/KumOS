@@ -209,6 +209,16 @@ static uint32_t sc_wait(uint32_t code_ptr, uint32_t b, uint32_t c) {
     return (uint32_t)sched_wait((int *)(code_ptr ? code_ptr : 0));
 }
 
+static uint32_t sc_waitstatus(uint32_t pid, uint32_t code_ptr, uint32_t c) {
+    (void)c;
+    return (uint32_t)sched_waitstatus((int)pid, (int *)(code_ptr ? code_ptr : 0));
+}
+
+static uint32_t sc_procstate(uint32_t pid, uint32_t b, uint32_t c) {
+    (void)b; (void)c;
+    return (uint32_t)sched_procstate((int)pid);
+}
+
 static uint32_t sc_gettime(uint32_t buf_addr, uint32_t b, uint32_t c) {
     (void)b; (void)c;
     if (!buf_addr) return (uint32_t)-1;
@@ -553,6 +563,8 @@ static syscall_fn syscall_table[SYSCALL_MAX] = {
     [SYS_EXECVE]      = sc_execve,
     [SYS_SELECT]      = sc_select,
     [SYS_POLL]        = sc_poll,
+    [SYS_WAITSTATUS]  = sc_waitstatus,
+    [SYS_PROCSTATE]   = sc_procstate,
 };
 
 uint32_t syscall_dispatch(syscall_regs_t *regs) {
