@@ -189,9 +189,29 @@ static void build_palette(void) {
                          ((uint32_t)(pal[i].g*255/63) << 8)  |
                           (uint32_t)(pal[i].b*255/63);
 
-    for (int i = 64; i < 256; i++) {
-        uint32_t v = (uint32_t)(i/4) * 255/63;
-        gui_pal_rgb[i] = (v<<16)|(v<<8)|v;
+    /* Desktop wallpaper: a real 3-stop gradient (light sky-blue at the
+       top, mid-blue through the middle, deep indigo at the bottom) over
+       192 bands instead of the old 8 - at 758px of desktop height, 8
+       bands meant ~95px-tall solid-color stripes, clearly visible as
+       chunky/pixelated banding rather than a smooth sky. 192 bands means
+       ~4px steps, well past what's perceptible as banding. */
+    {
+        int half = C_GRAD_SKY2_BANDS / 2;
+        for (int i = 0; i < C_GRAD_SKY2_BANDS; i++) {
+            int r, g, b;
+            if (i < half) {
+                int t = i, n = half;
+                r = 110 + (55-110)*t/n;
+                g = 140 + (75-140)*t/n;
+                b = 210 + (140-210)*t/n;
+            } else {
+                int t = i - half, n = C_GRAD_SKY2_BANDS - half;
+                r = 55 + (15-55)*t/n;
+                g = 75 + (18-75)*t/n;
+                b = 140 + (42-140)*t/n;
+            }
+            gui_pal_rgb[C_GRAD_SKY2+i] = ((uint32_t)r<<16)|((uint32_t)g<<8)|(uint32_t)b;
+        }
     }
 }
 
@@ -708,9 +728,9 @@ void gui_draw_desktop(void) {
 
     int dh = GUI_HEIGHT - 10;
     for (int y=10;y<GUI_HEIGHT;y++) {
-        int band = ((y-10) * 8) / dh;
-        if (band > 7) band = 7;
-        gui_hline(0, y, GUI_WIDTH, (uint8_t)(C_GRAD_SKY+band));
+        int band = ((y-10) * C_GRAD_SKY2_BANDS) / dh;
+        if (band > C_GRAD_SKY2_BANDS-1) band = C_GRAD_SKY2_BANDS-1;
+        gui_hline(0, y, GUI_WIDTH, (uint8_t)(C_GRAD_SKY2+band));
     }
 
     gui_icon(8, ICON_START_Y + 0*ICON_SLOT, "Term",  C_TEAL,       ICON_TERM);
