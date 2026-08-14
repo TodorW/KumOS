@@ -469,6 +469,16 @@ static void icon_glyph(int x, int y, icon_kind_t kind) {
         gui_rect_fill(x+7,  y+9, 3, 3, C_PURPLE);
         gui_rect_fill(x+12, y+9, 3, 3, C_BLACK);
         break;
+    case ICON_SNAKE: {
+        /* a zigzag of little squares - reads as a snake body at this
+           size better than trying to fake a curve out of rectangles. */
+        int sx[6] = {1,4,7,7,10,13}, sy[6] = {6,6,6,3,3,3};
+        for (int i=0;i<6;i++) {
+            uint8_t c = (i==5) ? C_LIGHT_RED : C_LIGHT_GREEN;
+            gui_rect_fill(x+sx[i], y+sy[i], 3, 3, c);
+        }
+        break;
+    }
     }
 }
 
@@ -538,7 +548,7 @@ static int gui_pressed(int x, int y, int w, int h) {
    (t>=WIN_TERMINAL && t<=WIN_TERMINAL3) work for "is this a terminal". */
 typedef enum {
     WIN_TERMINAL=0, WIN_TERMINAL2=1, WIN_TERMINAL3=2, WIN_FILES=3, WIN_SYSMON=4,
-    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_WRITE=9, WIN_PAINT=10, WIN_COUNT=11
+    WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_WRITE=9, WIN_PAINT=10, WIN_SNAKE=11, WIN_COUNT=12
 } wintype_t;
 
 typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
@@ -560,6 +570,7 @@ static const char *win_title(int t) {
         case WIN_BROWSER:  return "Web";
         case WIN_WRITE:    return "KumWrite";
         case WIN_PAINT:    return "Paint";
+        case WIN_SNAKE:    return "Snake";
     }
     return "";
 }
@@ -742,7 +753,8 @@ void gui_draw_desktop(void) {
     gui_icon(8, ICON_START_Y + 6*ICON_SLOT, "Web",   C_LIGHT_BLUE, ICON_BROWSER);
     gui_icon(8, ICON_START_Y + 7*ICON_SLOT, "Write", C_PINK,       ICON_NOTE);
     gui_icon(8, ICON_START_Y + 8*ICON_SLOT, "Paint", C_ORANGE,     ICON_PAINT);
-    gui_icon(8, ICON_START_Y + 9*ICON_SLOT, "Exit",  C_DARK_GREY,  ICON_EXIT);
+    gui_icon(8, ICON_START_Y + 9*ICON_SLOT, "Snake", C_GREEN,      ICON_SNAKE);
+    gui_icon(8, ICON_START_Y + 10*ICON_SLOT, "Exit", C_DARK_GREY,  ICON_EXIT);
 
     gui_printf(52, 18, C_LIGHT_GREY, C_DESKTOP,
                "Click icons to open apps");
@@ -1565,6 +1577,113 @@ static void paint_handle_click(winrec_t *w, int mx, int my) {
     }
 }
 
+/* Snake - the first actual game on this OS (everything before it, even
+   Paint, is a productivity tool). Keyboard-only, no click handler needed
+   (nothing clickable inside it - see gui_run()'s key-routing switch
+   instead of the click-dispatch chain). Movement runs on its own fixed
+   tick interval read off timer_ticks(), independent of however fast the
+   GUI's own render loop happens to be running - render_snake() gets
+   called every frame regardless, but only actually advances the snake
+   every 150ms. */
+#define SNAKE_COLS 20
+#define SNAKE_ROWS 15
+#define SNAKE_CELL 10
+#define SNAKE_MAX_LEN (SNAKE_COLS*SNAKE_ROWS)
+
+typedef struct { int8_t x, y; } snake_cell_t;
+static snake_cell_t snake_body[SNAKE_MAX_LEN];
+static int      snake_len = 0;
+static int      snake_dx = 1, snake_dy = 0;
+static int      snake_food_x = 0, snake_food_y = 0;
+static int      snake_score = 0;
+static int      snake_over = 0;
+static int      snake_started = 0;
+static uint32_t snake_last_tick = 0;
+static uint32_t snake_rng_state = 0;
+
+/* No general-purpose rand() anywhere in this kernel - tls.c has its own
+   SHA256-backed CSPRNG but that's a crypto concern, wrong thing to couple
+   a game's food placement to. A bog-standard LCG seeded off timer_ticks()
+   is plenty for "where does the next food dot go". */
+static uint32_t snake_rand(void) {
+    if (!snake_rng_state) snake_rng_state = timer_ticks() ^ 0x9E3779B9u;
+    snake_rng_state = snake_rng_state * 1103515245u + 12345u;
+    return snake_rng_state;
+}
+
+static void snake_place_food(void) {
+    for (;;) {
+        int fx = (int)(snake_rand() % SNAKE_COLS);
+        int fy = (int)(snake_rand() % SNAKE_ROWS);
+        int hit = 0;
+        for (int i=0;i<snake_len;i++)
+            if (snake_body[i].x==fx && snake_body[i].y==fy) { hit=1; break; }
+        if (!hit) { snake_food_x = fx; snake_food_y = fy; return; }
+    }
+}
+
+static void snake_reset(void) {
+    snake_len = 3;
+    snake_body[0] = (snake_cell_t){10,7};
+    snake_body[1] = (snake_cell_t){9,7};
+    snake_body[2] = (snake_cell_t){8,7};
+    snake_dx = 1; snake_dy = 0;
+    snake_score = 0;
+    snake_over = 0;
+    snake_last_tick = timer_ticks();
+    snake_place_food();
+}
+
+static void snake_step(void) {
+    int nx = snake_body[0].x + snake_dx;
+    int ny = snake_body[0].y + snake_dy;
+    if (nx<0 || nx>=SNAKE_COLS || ny<0 || ny>=SNAKE_ROWS) { snake_over = 1; return; }
+    for (int i=0;i<snake_len;i++)
+        if (snake_body[i].x==nx && snake_body[i].y==ny) { snake_over = 1; return; }
+
+    int grow = (nx==snake_food_x && ny==snake_food_y);
+    int new_len = grow ? snake_len+1 : snake_len;
+    if (new_len > SNAKE_MAX_LEN) new_len = SNAKE_MAX_LEN;
+    /* shift every segment out by one, high index first so each read of
+       body[i-1] happens before that slot gets overwritten */
+    for (int i = new_len-1; i > 0; i--) snake_body[i] = snake_body[i-1];
+    snake_body[0].x = (int8_t)nx; snake_body[0].y = (int8_t)ny;
+    snake_len = new_len;
+    if (grow) { snake_score++; snake_place_food(); }
+}
+
+static void render_snake(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "Snake");
+    if (!snake_started) { snake_reset(); snake_started = 1; }
+
+    if (!snake_over && timer_ticks() - snake_last_tick >= 15) {
+        snake_last_tick = timer_ticks();
+        snake_step();
+    }
+
+    int cx0 = w->x+4, cy0 = w->y+14;
+    int cw = SNAKE_COLS*SNAKE_CELL, ch = SNAKE_ROWS*SNAKE_CELL;
+    gui_rect_fill(cx0, cy0, cw, ch, C_BLACK);
+    gui_rect(cx0-1, cy0-1, cw+2, ch+2, C_WIN_BORDER);
+
+    for (int i=0;i<snake_len;i++) {
+        uint8_t c = (i==0) ? C_LIGHT_GREEN : C_GREEN;
+        gui_rect_fill(cx0+snake_body[i].x*SNAKE_CELL, cy0+snake_body[i].y*SNAKE_CELL,
+                      SNAKE_CELL-1, SNAKE_CELL-1, c);
+    }
+    gui_rect_fill(cx0+snake_food_x*SNAKE_CELL, cy0+snake_food_y*SNAKE_CELL,
+                  SNAKE_CELL-1, SNAKE_CELL-1, C_RED);
+
+    char scorebuf[24] = "Score: ";
+    char nb[12]; kitoa((uint32_t)snake_score, nb, 10);
+    kstrcat(scorebuf, nb);
+    gui_puts(cx0, cy0+ch+4, scorebuf, C_WHITE, C_WIN_BG);
+    if (snake_over)
+        gui_puts(cx0, cy0+ch+14, "Game over - press R", C_LIGHT_RED, C_WIN_BG);
+    else
+        gui_puts(cx0, cy0+ch+14, "Arrow keys to steer", C_DARK_GREY, C_WIN_BG);
+}
+
 static int  pkg_selected = -1;
 static char pkg_status[24] = "";
 
@@ -1752,6 +1871,7 @@ static int launcher_build(launch_item_t *items, int max) {
     if (n<max) items[n++] = (launch_item_t){"Browser",        ICON_BROWSER, WIN_BROWSER,  0, 0};
     if (n<max) items[n++] = (launch_item_t){"KumWrite",       ICON_NOTE,    WIN_WRITE,    0, 0};
     if (n<max) items[n++] = (launch_item_t){"Paint",          ICON_PAINT,   WIN_PAINT,    0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Snake",          ICON_SNAKE,   WIN_SNAKE,    0, 0};
     int total = pkgwin_total();
     for (int i=0;i<total && n<max;i++) {
         if (!pkgwin_installed(i)) continue;
@@ -1776,6 +1896,7 @@ static void launcher_open_wintype(int t) {
         case WIN_BROWSER:  wm_open(WIN_BROWSER, 260,  60, 500, 420);       break;
         case WIN_WRITE:    wm_open(WIN_WRITE,   300, 100, 520, 400);       break;
         case WIN_PAINT:    wm_open(WIN_PAINT,   340,  80, 340, 260);       break;
+        case WIN_SNAKE:    wm_open(WIN_SNAKE,   400, 200, 220, 216);       break;
     }
 }
 
@@ -1887,6 +2008,7 @@ void gui_run(void) {
             else if (t==WIN_BROWSER) render_browser(w);
             else if (t==WIN_WRITE) render_write(w);
             else if (t==WIN_PAINT) render_paint(w);
+            else if (t==WIN_SNAKE) render_snake(w);
         }
 
         gui_draw_taskbar();
@@ -1990,6 +2112,12 @@ void gui_run(void) {
                     write_lines[write_row][write_col++] = key;
                     write_lines[write_row][write_col]   = 0;
                 }
+            } else if (top == WIN_SNAKE) {
+                if (snake_over && (key=='r' || key=='R')) snake_reset();
+                else if (key == KEY_UP    && snake_dy==0) { snake_dx=0;  snake_dy=-1; }
+                else if (key == KEY_DOWN  && snake_dy==0) { snake_dx=0;  snake_dy=1;  }
+                else if (key == KEY_LEFT  && snake_dx==0) { snake_dx=-1; snake_dy=0;  }
+                else if (key == KEY_RIGHT && snake_dx==0) { snake_dx=1;  snake_dy=0;  }
             }
         }
 
@@ -2078,7 +2206,8 @@ void gui_run(void) {
                 else if (iconidx==6) wm_open(WIN_BROWSER, 260,  60, 500, 420);
                 else if (iconidx==7) wm_open(WIN_WRITE,   300, 100, 520, 400);
                 else if (iconidx==8) wm_open(WIN_PAINT,   340,  80, 340, 260);
-                else if (iconidx==9) running = 0;
+                else if (iconidx==9) wm_open(WIN_SNAKE,   400, 200, 220, 216);
+                else if (iconidx==10) running = 0;
             }
         }
 
