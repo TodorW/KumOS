@@ -109,6 +109,32 @@ static void vga_scroll_down_lines(void) {
         VGA_MEM[x] = vga_entry(' ', terminal_color);
 }
 
+/* Alt screen buffer (CSI ?1049h/l, ?47h/l - what vi/ed-style full-screen
+   programs use to leave the scrollback untouched and restore it on exit).
+   The real VGA text-mode memory at 0xB8000 has no second hardware page to
+   flip to like the framebuffer's double-buffering does, so this is a
+   plain software copy into a kmalloc-free static array - 4000 bytes, cheap
+   enough to always keep resident rather than allocate on first use. */
+static uint16_t alt_screen_buf[VGA_WIDTH * VGA_HEIGHT];
+static int      alt_screen_active = 0;
+static int      alt_saved_row = 0, alt_saved_col = 0;
+
+static void vga_enter_alt_screen(void) {
+    if (alt_screen_active) return;
+    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) alt_screen_buf[i] = VGA_MEM[i];
+    alt_saved_row = terminal_row;
+    alt_saved_col = terminal_col;
+    alt_screen_active = 1;
+    vga_clear();
+}
+
+static void vga_exit_alt_screen(void) {
+    if (!alt_screen_active) return;
+    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) VGA_MEM[i] = alt_screen_buf[i];
+    alt_screen_active = 0;
+    vga_goto(alt_saved_row, alt_saved_col);
+}
+
 void vga_init(void) {
     terminal_row = 0;
     terminal_col = 0;
@@ -193,8 +219,14 @@ void vga_putchar(char c) {
                 case 'T': { int n=ansi_params[0]?ansi_params[0]:1; for(int i=0;i<n;i++) vga_scroll_down_lines(); break; }
                 case 's': ansi_saved_row = terminal_row; ansi_saved_col = terminal_col; break;
                 case 'u': vga_goto(ansi_saved_row, ansi_saved_col); break;
-                case 'h': if (ansi_private && ansi_params[0] == 25) vga_cursor_show(1); break;
-                case 'l': if (ansi_private && ansi_params[0] == 25) vga_cursor_show(0); break;
+                case 'h':
+                    if (ansi_private && ansi_params[0] == 25) vga_cursor_show(1);
+                    else if (ansi_private && (ansi_params[0] == 1049 || ansi_params[0] == 47)) vga_enter_alt_screen();
+                    break;
+                case 'l':
+                    if (ansi_private && ansi_params[0] == 25) vga_cursor_show(0);
+                    else if (ansi_private && (ansi_params[0] == 1049 || ansi_params[0] == 47)) vga_exit_alt_screen();
+                    break;
                 default: break; /* unrecognized final byte: consumed, not printed - no garbage leak */
             }
             ansi_esc_state = 0;
