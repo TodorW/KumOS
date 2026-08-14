@@ -197,11 +197,24 @@ static void build_palette(void) {
 
 static uint8_t *backbuf = 0;
 
+/* The desktop background (gradient + icon column + hint text) never
+   changes frame to frame, but gui_draw_desktop() was being called - and
+   fully recomputed via ~800 individual gui_pixel-bounds-checked draw
+   calls, rounded-rect math and all - at the top of every single loop
+   iteration regardless. Render it once into this cache and kmemcpy it
+   into backbuf every frame instead; windows/taskbar/cursor still draw on
+   top of that each frame same as before. This was the single biggest
+   real cost in the per-frame render path - a plain memcpy of ~768KB is
+   drastically cheaper than ~800 draw calls each doing their own bounds
+   checks and per-pixel math. */
+static uint8_t *desktop_cache = 0;
+
 void gui_init(void) {
     if (set_vbe_mode(GUI_WIDTH, GUI_HEIGHT, 32) != 0)
         serial_printf("[gui] no VBE framebuffer found (need qemu -vga std)\r\n");
     build_palette();
     if (!backbuf) backbuf = (uint8_t*)vmalloc(GUI_WIDTH * GUI_HEIGHT);
+    if (!desktop_cache) desktop_cache = (uint8_t*)vmalloc(GUI_WIDTH * GUI_HEIGHT);
     mouse_set_bounds(GUI_WIDTH - 1, GUI_HEIGHT - 1);
 }
 
@@ -1739,9 +1752,15 @@ void gui_run(void) {
     int resizing = -1, resize_ow = 0, resize_oh = 0, resize_mx = 0, resize_my = 0;
     int running = 1;
 
+    /* Build the static desktop background once, into backbuf via the
+       normal draw calls, then snapshot it - the loop below just restores
+       this snapshot every frame instead of recomputing it. */
+    gui_draw_desktop();
+    kmemcpy(desktop_cache, backbuf, GUI_WIDTH * GUI_HEIGHT);
+
     while (running) {
 
-        gui_draw_desktop();
+        kmemcpy(backbuf, desktop_cache, GUI_WIDTH * GUI_HEIGHT);
 
         for (int i=0;i<zcount;i++) {
             int t = zorder[i];
