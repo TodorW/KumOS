@@ -155,6 +155,13 @@ void sched_exit_code(int code) {
             kfree(tasks[current_idx].stack);
             tasks[current_idx].stack = 0;
         }
+
+        /* Nothing ever actually sent SIGCHLD before - sched_waitpid() and
+           friends busy-poll task state directly so nothing depended on it,
+           but that also meant a handler installed via signal()/SIGCHLD had
+           no way to ever fire. Real Unix behavior: notify the parent every
+           time a child becomes reapable. */
+        signal_send(tasks[current_idx].parent_pid, SIGCHLD);
     } else {
         tasks[current_idx].state = TASK_DEAD;
         if (tasks[current_idx].stack) {
