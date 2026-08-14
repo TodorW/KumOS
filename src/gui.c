@@ -539,6 +539,19 @@ static int gui_pressed(int x, int y, int w, int h) {
     return cur_mdown && point_in(cur_mx, cur_my, x, y, w, h);
 }
 
+/* No general-purpose rand() anywhere in this kernel - tls.c has its own
+   SHA256-backed CSPRNG but that's a crypto concern, wrong thing to couple
+   a game's food/tile placement to. A bog-standard LCG seeded off
+   timer_ticks() is plenty for "where does the next thing go" - shared by
+   Snake and 2048. */
+static uint32_t gui_rng_state = 0;
+
+static uint32_t gui_rand(void) {
+    if (!gui_rng_state) gui_rng_state = timer_ticks() ^ 0x9E3779B9u;
+    gui_rng_state = gui_rng_state * 1103515245u + 12345u;
+    return gui_rng_state;
+}
+
 #define ICON_START_Y 16
 #define ICON_SLOT    38
 
@@ -1599,22 +1612,11 @@ static int      snake_score = 0;
 static int      snake_over = 0;
 static int      snake_started = 0;
 static uint32_t snake_last_tick = 0;
-static uint32_t snake_rng_state = 0;
-
-/* No general-purpose rand() anywhere in this kernel - tls.c has its own
-   SHA256-backed CSPRNG but that's a crypto concern, wrong thing to couple
-   a game's food placement to. A bog-standard LCG seeded off timer_ticks()
-   is plenty for "where does the next food dot go". */
-static uint32_t snake_rand(void) {
-    if (!snake_rng_state) snake_rng_state = timer_ticks() ^ 0x9E3779B9u;
-    snake_rng_state = snake_rng_state * 1103515245u + 12345u;
-    return snake_rng_state;
-}
 
 static void snake_place_food(void) {
     for (;;) {
-        int fx = (int)(snake_rand() % SNAKE_COLS);
-        int fy = (int)(snake_rand() % SNAKE_ROWS);
+        int fx = (int)(gui_rand() % SNAKE_COLS);
+        int fy = (int)(gui_rand() % SNAKE_ROWS);
         int hit = 0;
         for (int i=0;i<snake_len;i++)
             if (snake_body[i].x==fx && snake_body[i].y==fy) { hit=1; break; }
