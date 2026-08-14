@@ -308,13 +308,13 @@ void _start(void) {
 
 #endif
 static inline int sys_kill(int pid, int sig) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(30),"b"(pid),"c"(sig)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(30),"b"(pid),"c"(sig):"memory"); return r;
 }
 static inline int sys_signal(int sig, void (*handler)(int)) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(31),"b"(sig),"c"(handler)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(31),"b"(sig),"c"(handler):"memory"); return r;
 }
 static inline int sys_fork(void) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(20)); return r;
+    return _syscall(20, 0, 0, 0);
 }
 
 static inline int sprintf(char *buf, const char *fmt, ...) {
@@ -489,7 +489,7 @@ static int sscanf(const char *str, const char *fmt, ...) {
 }
 
 static inline int sys_exec(const char *path) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(19),"b"(path)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(19),"b"(path):"memory"); return r;
 }
 
 #ifndef STDIN_FILENO
@@ -516,11 +516,11 @@ static inline char *strncat(char *dst, const char *src, size_t n) {
 
 
 static inline int execve(const char *path, char *const argv[]) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(44),"b"(path),"c"(argv)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(44),"b"(path),"c"(argv):"memory"); return r;
 }
 static inline int select_fd(int nfds, uint32_t *rfds) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(45),"b"(nfds),"c"(rfds)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(45),"b"(nfds),"c"(rfds):"memory"); return r;
 }
 static inline int poll_fd(int *fds, int nfds) {
-    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(46),"b"(fds),"c"(nfds)); return r;
+    int r; __asm__ volatile("int $0x80":"=a"(r):"a"(46),"b"(fds),"c"(nfds):"memory"); return r;
 }
