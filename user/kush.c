@@ -76,9 +76,31 @@ static int split(char *line, char *argv[], int max) {
     return argc;
 }
 
+/* No -e flag needed/supported (kush's tokenizer has no quoting, so a flag
+   before a string with spaces wouldn't parse cleanly anyway) - backslash
+   escapes are just always decoded, same default-on behavior as dash/sh's
+   builtin echo. Mainly \e matters here: it's the only way to type a real
+   ESC byte at the kush prompt to drive the VGA ANSI parser by hand (e.g.
+   `echo "\e[?1049h"` for the alt screen buffer) since kush has no way to
+   insert a literal control character into a typed line otherwise. */
 static int do_echo(char *argv[], int argc) {
     for (int i=1;i<argc;i++) {
-        fputs(argv[i]);
+        const char *s = argv[i];
+        while (*s) {
+            if (s[0] == '\\' && s[1]) {
+                switch (s[1]) {
+                    case 'n': putchar('\n'); break;
+                    case 't': putchar('\t'); break;
+                    case 'r': putchar('\r'); break;
+                    case 'e': putchar(27);   break;
+                    case '\\': putchar('\\'); break;
+                    default: putchar(s[0]); putchar(s[1]); break;
+                }
+                s += 2;
+            } else {
+                putchar(*s); s++;
+            }
+        }
         if (i<argc-1) putchar(' ');
     }
     putchar('\n');
@@ -554,7 +576,8 @@ static int do_help(char *argv[], int argc) {
     fputs("    kill <pid> [sig]  - Send signal\n");
     fputs("    jobs              - List background jobs\n");
     fputs("    fg [%N]           - Bring job N (default: last) to foreground\n");
-    fputs("    bg [%N]           - Resume stopped job N in the background\n\n");
+    fputs("    bg [%N]           - Resume stopped job N in the background\n");
+    fputs("    wait [%N]         - Wait for job N, or all background jobs\n\n");
     fputs("  /proc files:\n");
     fputs("    cat /proc/meminfo  cat /proc/ps\n");
     fputs("    cat /proc/uptime   cat /proc/net\n\n");
