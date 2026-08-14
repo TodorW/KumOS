@@ -124,6 +124,22 @@ void sched_exit_code(int code) {
     __asm__ volatile ("cli");
     tasks[current_idx].exit_code = code;
 
+    /* Every fork()'d/execve'd task owns a private page directory
+       (page_dir_phys) cloned by paging_clone_dir() - this was never freed
+       on exit, only the kernel stack was, so every process that forked
+       and exited leaked its entire address space (page directory + every
+       privately-owned page table + page). A few fork() cycles in a row
+       exhausted physical memory and crashed with a real page fault
+       (NOTPRES, CR2 nowhere near anything the failing code touched
+       directly - just pmm_alloc() silently running out and demand-paging
+       leaving the page unmapped). Must switch off this directory before
+       freeing it - it's still the live CR3 at this point. */
+    if (tasks[current_idx].page_dir_phys) {
+        paging_switch(paging_root_dir());
+        paging_free_user(tasks[current_idx].page_dir_phys);
+        tasks[current_idx].page_dir_phys = 0;
+    }
+
     int has_parent = 0;
     for (int i = 0; i < task_count; i++) {
         if (tasks[i].pid == tasks[current_idx].parent_pid
