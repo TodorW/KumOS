@@ -551,7 +551,10 @@ static int do_help(char *argv[], int argc) {
     fputs("    history           - Command history\n");
     fputs("    !!  !N            - Repeat last / Nth history entry\n");
     fputs("    exit [code]       - Exit shell\n");
-    fputs("    kill <pid> [sig]  - Send signal\n\n");
+    fputs("    kill <pid> [sig]  - Send signal\n");
+    fputs("    jobs              - List background jobs\n");
+    fputs("    fg [%N]           - Bring job N (default: last) to foreground\n");
+    fputs("    bg [%N]           - Resume stopped job N in the background\n\n");
     fputs("  /proc files:\n");
     fputs("    cat /proc/meminfo  cat /proc/ps\n");
     fputs("    cat /proc/uptime   cat /proc/net\n\n");
@@ -561,11 +564,127 @@ static int do_help(char *argv[], int argc) {
     fputs("    CAT.ELF           - File reader\n");
     fputs("    SYSINFO.ELF       - System info\n\n");
     fputs("  Pipes:  cmd1 | cmd2 | cmd3 (any number of stages)\n\n");
+    fputs("  Job control:  cmd &  runs an external command in the background.\n");
+    fputs("    Ctrl+Z stops the foreground job (fg/bg to resume it).\n\n");
     fputs("  Scripts (source <file> or . <file>), one keyword per own line:\n");
     fputs("    if <cmd> / then / ... / elif <cmd> / ... / else / ... / fi\n");
     fputs("    for VAR in a b c / do / ... / done\n");
     fputs("    while <cmd> / do / ... / done\n");
     fputs("    break / continue  (inside for/while)\n\n");
+    return 0;
+}
+
+/* Job control: background (&), jobs/fg/bg. Scoped to single, non-piped
+   external commands (the do_exec() fork+execve path) - builtins run
+   in-process with no fork of their own, so backgrounding one wouldn't
+   actually do anything but block the shell exactly as if it weren't
+   backgrounded; run_pipeline() only sets g_bg_next for the un-piped,
+   single-command case, and do_exec() is the only place that consumes it
+   (silently ignored for builtins, same as a "&" on a bare shell keyword in
+   a real shell being pointless). */
+#define KUSH_MAX_JOBS 8
+typedef struct {
+    int  used;
+    int  id;
+    int  pid;
+    char cmd[48];
+} kush_job_t;
+static kush_job_t g_jobs[KUSH_MAX_JOBS];
+static int g_next_job_id = 1;
+static int g_bg_next = 0;
+
+static int job_add(int pid, const char *cmd) {
+    for (int i = 0; i < KUSH_MAX_JOBS; i++) {
+        if (g_jobs[i].used) continue;
+        g_jobs[i].used = 1;
+        g_jobs[i].id   = g_next_job_id++;
+        g_jobs[i].pid  = pid;
+        strncpy(g_jobs[i].cmd, cmd, sizeof(g_jobs[i].cmd)-1);
+        g_jobs[i].cmd[sizeof(g_jobs[i].cmd)-1] = 0;
+        return g_jobs[i].id;
+    }
+    return -1;
+}
+
+static kush_job_t *job_find(int id) {
+    for (int i = 0; i < KUSH_MAX_JOBS; i++)
+        if (g_jobs[i].used && g_jobs[i].id == id) return &g_jobs[i];
+    return 0;
+}
+
+static kush_job_t *job_last(void) {
+    kush_job_t *best = 0;
+    for (int i = 0; i < KUSH_MAX_JOBS; i++)
+        if (g_jobs[i].used && (!best || g_jobs[i].id > best->id)) best = &g_jobs[i];
+    return best;
+}
+
+/* Reaps any background job that finished on its own (sys_procstate()==2,
+   exited but not yet waited on) and prints the "Done" line a real shell
+   shows just before its next prompt. Non-blocking - sys_waitstatus() on an
+   already-zombie pid returns immediately, it's only a blocking loop while
+   the child is still alive. */
+static void jobs_reap_done(void) {
+    for (int i = 0; i < KUSH_MAX_JOBS; i++) {
+        if (!g_jobs[i].used) continue;
+        int st = sys_procstate(g_jobs[i].pid);
+        if (st == 2) {
+            int code = 0;
+            sys_waitstatus(g_jobs[i].pid, &code);
+            printf("[%d]+  Done                    %s\n", g_jobs[i].id, g_jobs[i].cmd);
+            g_jobs[i].used = 0;
+        } else if (st == -1) {
+            g_jobs[i].used = 0;
+        }
+    }
+}
+
+static int do_jobs(char *argv[], int argc) {
+    (void)argv; (void)argc;
+    jobs_reap_done();
+    int any = 0;
+    for (int i = 0; i < KUSH_MAX_JOBS; i++) {
+        if (!g_jobs[i].used) continue;
+        any = 1;
+        int st = sys_procstate(g_jobs[i].pid);
+        printf("[%d]+  %-9s%s\n", g_jobs[i].id, st == 1 ? "Stopped" : "Running", g_jobs[i].cmd);
+    }
+    if (!any) fputs("kush: no background jobs\n");
+    return 0;
+}
+
+/* fg [%N] - bring a job to the foreground: SIGCONT it if stopped, then
+   block on it exactly like a freshly-forked foreground command would
+   (same sys_waitstatus() path do_exec() uses), so a re-stopped or
+   Ctrl+C'd fg job re-enters the job table correctly either way. */
+static int do_fg(char *argv[], int argc) {
+    kush_job_t *j = (argc > 1) ? job_find(atoi(argv[1][0]=='%'?argv[1]+1:argv[1])) : job_last();
+    if (!j) { fputs("kush: fg: no such job\n"); return 1; }
+    printf("%s\n", j->cmd);
+    int pid = j->pid;
+    char cmd[48]; strncpy(cmd, j->cmd, sizeof(cmd)-1); cmd[sizeof(cmd)-1]=0;
+    j->used = 0;
+    sys_kill(pid, KUSH_SIGCONT);
+
+    int status = 0;
+    int r = sys_waitstatus(pid, &status);
+    if (r == 2) {
+        int jid = job_add(pid, cmd);
+        printf("\n[%d]+  Stopped                 %s\n", jid, cmd);
+        return 148;
+    }
+    return status;
+}
+
+/* bg [%N] - resume a stopped job in the background: SIGCONT it, leave it
+   in the job table, don't wait. No-op (with a message) on a job that's
+   already running. */
+static int do_bg(char *argv[], int argc) {
+    kush_job_t *j = (argc > 1) ? job_find(atoi(argv[1][0]=='%'?argv[1]+1:argv[1])) : job_last();
+    if (!j) { fputs("kush: bg: no such job\n"); return 1; }
+    if (sys_procstate(j->pid) != 1) { printf("kush: bg: job %d already running\n", j->id); return 1; }
+    sys_kill(j->pid, KUSH_SIGCONT);
+    printf("[%d]+  %s &\n", j->id, j->cmd);
     return 0;
 }
 
@@ -645,7 +764,21 @@ static int do_exec(char *argv[], int argc) {
         printf("kush: %s: not found\n", cmd);
         exit(127);
     }
-    return waitpid(pid);
+    if (g_bg_next) {
+        g_bg_next = 0;
+        int jid = job_add(pid, cmd);
+        printf("[%d] %d\n", jid, pid);
+        return 0;
+    }
+
+    int status = 0;
+    int r = sys_waitstatus(pid, &status);
+    if (r == 2) {
+        int jid = job_add(pid, cmd);
+        printf("\n[%d]+  Stopped                 %s\n", jid, cmd);
+        return 148;
+    }
+    return status;
 }
 
 static int run_script(const char *filename);
@@ -684,6 +817,9 @@ static int dispatch_one(char *argv[], int argc) {
     if (!strcmp(cmd,"history")) return do_history(argv,argc);
     if (!strcmp(cmd,"write"))   return do_write(argv,argc);
     if (!strcmp(cmd,"kill"))    return do_kill(argv,argc);
+    if (!strcmp(cmd,"jobs"))    return do_jobs(argv,argc);
+    if (!strcmp(cmd,"fg"))      return do_fg(argv,argc);
+    if (!strcmp(cmd,"bg"))      return do_bg(argv,argc);
     if (!strcmp(cmd,"clear"))   { fputs("\033[2J\033[H"); return 0; }
     return do_exec(argv, argc);
 }
@@ -692,6 +828,19 @@ static int dispatch_one(char *argv[], int argc) {
    compacting the remaining args in place. Requires whitespace around the
    operator, same as split()'s space-only tokenizing - "cmd>file" with no
    spaces isn't recognized, only "cmd > file". */
+/* Strips a trailing bare "&" token (background job marker) off argv, same
+   in-place-compaction style as parse_redir() below. Only checked on the
+   un-piped single-command path in run_pipeline() - see the job-control
+   comment above do_exec() for why pipelines and builtins don't get this. */
+static int strip_bg(char *argv[], int *argc) {
+    if (*argc > 0 && !strcmp(argv[*argc-1], "&")) {
+        (*argc)--;
+        argv[*argc] = 0;
+        return 1;
+    }
+    return 0;
+}
+
 static void parse_redir(char *argv[], int *argc, char **out_file, int *append, char **in_file) {
     int j = 0;
     for (int i = 0; i < *argc; i++) {
@@ -883,6 +1032,9 @@ static int run_pipeline(char *line) {
         char *argv[ARG_MAX]; int argc = split(parts[0], argv, ARG_MAX);
         if (!argc) return 0;
 
+        int background = strip_bg(argv, &argc);
+        if (!argc) return 0;
+
         char *out_file = 0, *in_file = 0; int append = 0;
         parse_redir(argv, &argc, &out_file, &append, &in_file);
         if (!argc) return 0;
@@ -916,7 +1068,9 @@ static int run_pipeline(char *line) {
             sys_dup2(in_fd, 0);
         }
 
+        g_bg_next = background;
         int ret = dispatch_one(argv, argc);
+        g_bg_next = 0;
 
         if (saved_out >= 0) { sys_dup2(saved_out, 1); close(saved_out); }
         if (saved_in  >= 0) { sys_dup2(saved_in,  0); close(saved_in);  }
@@ -1197,6 +1351,7 @@ int main(void) {
 
     for (;;) {
 
+        jobs_reap_done();
         if (last_exit != 0) printf("[%d] ", last_exit);
         print_prompt();
 
