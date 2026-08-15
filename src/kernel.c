@@ -1587,6 +1587,17 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
     serial_printf("----------------------------------------\r\n");
     vga_set_color(VGA_WHITE,VGA_BLACK);
 
+    /* Straight to the real userspace shell on boot, same code path as the
+       "kush" CLI command. Falls through to the GUI desktop if kush exits
+       (or KUSH.ELF is missing), then to the bare CLI loop below if the
+       GUI is also exited - each stage is just the next fallback. */
+    elf_load_result_t boot_r = elf_load_disk("KUSH.ELF");
+    if (boot_r.error == 0) {
+        int boot_pid = elf_spawn("kush", &boot_r);
+        if (boot_pid >= 0) sched_waitpid(boot_pid);
+    }
+    gui_run();
+
     char line[CMD_LEN];
     while (1) {
         print_prompt();
