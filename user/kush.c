@@ -1295,14 +1295,36 @@ static void print_prompt(void) {
     printf("\033[32mkush\033[0m:\033[36m%s\033[0m$ ", cwd_buf);
 }
 
+/* fastfetch-style: logo left, real system info right, row for row */
 static void motd(void) {
+    const char *logo[6] = {
+        "  _  ___   _ ____  _   _  ",
+        " | |/ / | | / ___|| | | | ",
+        " | ' /| | | \\___ \\| |_| | ",
+        " | . \\| |_| |___) |  _  | ",
+        " |_|\\_\\\\___/|____/|_| |_| ",
+        "                           ",
+    };
+    char info[6][40];
+    sprintf(info[0], "OS: KumOS v1.9");
+    sprintf(info[1], "Kernel: x86 (i686)");
+    sprintf(info[2], "Shell: kush v%s", KUSH_VER);
+    sprintf(info[3], "Uptime: %us", uptime());
+    time_t t;
+    if (gettime(&t) == 0)
+        sprintf(info[4], "Date: %04u-%02u-%02u", (unsigned)t.year, (unsigned)t.month, (unsigned)t.day);
+    else
+        info[4][0] = 0;
+    sprintf(info[5], "Type 'help' to get started");
+
     fputs("\n");
-    fputs("  _  ___   _ ____  _   _\n");
-    fputs(" | |/ / | | / ___|| | | |\n");
-    fputs(" | ' /| | | \\___ \\| |_| |\n");
-    fputs(" | . \\| |_| |___) |  _  |\n");
-    fputs(" |_|\\_\\\\___/|____/|_| |_|\n");
-    printf("\n  kush v%s - KumOS Shell  (type 'help')\n\n", KUSH_VER);
+    for (int i = 0; i < 6; i++) {
+        fputs(logo[i]);
+        fputs("  ");
+        fputs(info[i]);
+        fputs("\n");
+    }
+    fputs("\n");
 }
 
 /* Real control flow for scripts: if/elif/then/else/fi, for VAR in .../do/
