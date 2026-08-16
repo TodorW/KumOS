@@ -1066,6 +1066,18 @@ static void dispatch(const char *line) {
             while(*p>='0'&&*p<='9'){pid=pid*10+(*p-'0');p++;}
             kprintf("Waiting for PID %d...\n", pid);
             int code = sched_waitpid(pid);
+            /* sched_waitpid()'s busy-wait loop resumes this task through
+               switch_context()'s raw popfd/ret, not an interrupt's iret -
+               it only comes back with interrupts on if something further
+               up the call chain (a syscall ISR's epilogue, say) eventually
+               irets and restores them. Called straight from this bare
+               kernel shell (task 0, no such ISR above it), that never
+               happens: popfd just replays whatever IF was live at the cli
+               right before the last switch, which is always 0 - leaving
+               every hlt from here on hanging forever. Every sched_waitpid()
+               call site that isn't itself inside an interrupt handler
+               needs this same explicit sti. */
+            __asm__ volatile("sti");
             kprintf("PID %d exited with code %d\n", pid, code);
         }
     }
@@ -1272,6 +1284,7 @@ static void dispatch(const char *line) {
             int pid = elf_spawn("kush", &r);
             if (pid >= 0) {
                 int code = sched_waitpid(pid);
+                __asm__ volatile("sti"); /* see the "wait" command's sched_waitpid() above */
                 kprintf("\n[kush exited with code %d]\n", code);
             } else vga_puts("kush: spawn failed\n");
         } else {
@@ -1390,6 +1403,7 @@ static void dispatch(const char *line) {
                     if (pid >= 0) {
                         kprintf("  Spawned '%s' as ring-3 process  PID=%d\n", rest, pid);
                         int code = sched_waitpid(pid);
+                        __asm__ volatile("sti"); /* see the "wait" command's sched_waitpid() above */
                         kprintf("  Process exited with code %d\n", code);
                     } else vga_puts("run: failed to spawn process\n");
                 } else {
@@ -1439,6 +1453,7 @@ static void dispatch(const char *line) {
                 if (pid >= 0) {
                     kprintf("  Running as ring-3 PID=%d\n", pid);
                     int code = sched_waitpid(pid);
+                    __asm__ volatile("sti"); /* see the "wait" command's sched_waitpid() above */
                     kprintf("  Process exited with code %d\n", code);
                 } else vga_puts("  Spawn failed.\n");
             } else {
@@ -1594,7 +1609,10 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
     elf_load_result_t boot_r = elf_load_disk("KUSH.ELF");
     if (boot_r.error == 0) {
         int boot_pid = elf_spawn("kush", &boot_r);
-        if (boot_pid >= 0) sched_waitpid(boot_pid);
+        if (boot_pid >= 0) {
+            sched_waitpid(boot_pid);
+            __asm__ volatile("sti"); /* see the "wait" command's sched_waitpid() above */
+        }
     }
     gui_run();
 

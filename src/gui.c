@@ -914,6 +914,16 @@ static void term_run_elf(elf_load_result_t *r, const char *name) {
     term_exec_linelen = 0;
     vfs_set_stdout_sink(term_exec_output);
     int code = sched_waitpid(pid);
+    /* sched_waitpid()'s busy-wait resumes this task via switch_context()'s
+       raw popfd/ret, not an interrupt's iret - it only comes back with
+       interrupts on if something else along the way (a syscall ISR
+       epilogue, say) eventually irets and restores them. Called straight
+       from the GUI's own loop (no such ISR above it), that never happens:
+       the popfd just replays whatever IF was live at the cli right before
+       the switch, which is always 0. Same root cause as the kernel.c
+       boot-flow hang below - explicit sti needed at every call site that
+       isn't itself inside an interrupt. */
+    __asm__ volatile("sti");
     vfs_set_stdout_sink(0);
     if (term_exec_linelen > 0) {
         term_exec_linebuf[term_exec_linelen] = 0;
