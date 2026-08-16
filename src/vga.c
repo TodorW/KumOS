@@ -97,11 +97,20 @@ void vga_font_snapshot(void) {
     outb(0x3C4, 0x04); uint8_t old_mem_mode = inb(0x3C5);
     outb(0x3CE, 0x04); uint8_t old_read_map = inb(0x3CF);
     outb(0x3CE, 0x05); uint8_t old_gmode = inb(0x3CF);
+    outb(0x3CE, 0x06); uint8_t old_misc = inb(0x3CF);
 
     outb(0x3C4, 0x02); outb(0x3C5, 0x04);              /* plane 2 */
     outb(0x3C4, 0x04); outb(0x3C5, (uint8_t)(old_mem_mode | 0x04)); /* sequential */
     outb(0x3CE, 0x04); outb(0x3CF, 0x02);               /* read plane 2 */
     outb(0x3CE, 0x05); outb(0x3CF, (uint8_t)(old_gmode & ~0x10));   /* no odd/even */
+    /* GC Misc bits 2-3 pick which CPU-visible window (0xA0000 vs 0xB8000)
+       the card currently answers to - whatever text mode last set this to
+       (0xB8000-only) leaves 0xA0000 reading open bus (0xFF), not plane 2.
+       Clearing them maps 0xA0000-0xBFFFF, the window this function reads
+       from. Missing this made every "snapshotted" glyph read back as a
+       uniform 0xFF - confirmed via a serial dump of glyph 'A' reading all
+       0xFF instead of a real letter shape. */
+    outb(0x3CE, 0x06); outb(0x3CF, (uint8_t)(old_misc & ~0x0C));
 
     for (int i = 0; i < 256 * 32; i++) vga_font_buf[i] = plane[i];
     vga_font_saved = 1;
@@ -110,6 +119,7 @@ void vga_font_snapshot(void) {
     outb(0x3C4, 0x04); outb(0x3C5, old_mem_mode);
     outb(0x3CE, 0x04); outb(0x3CF, old_read_map);
     outb(0x3CE, 0x05); outb(0x3CF, old_gmode);
+    outb(0x3CE, 0x06); outb(0x3CF, old_misc);
 }
 
 void vga_font_restore(void) {
@@ -125,7 +135,7 @@ void vga_font_restore(void) {
     outb(0x3C4, 0x02); outb(0x3C5, 0x04);              /* write plane 2 only */
     outb(0x3C4, 0x04); outb(0x3C5, (uint8_t)(old_mem_mode | 0x04)); /* sequential */
     outb(0x3CE, 0x05); outb(0x3CF, (uint8_t)(old_gmode & ~0x10));   /* no odd/even */
-    outb(0x3CE, 0x06); outb(0x3CF, (uint8_t)(old_misc & ~0x02));    /* map @ 0xA0000 */
+    outb(0x3CE, 0x06); outb(0x3CF, (uint8_t)(old_misc & ~0x0C));    /* map @ 0xA0000 (bits 2-3, not bit 1) */
 
     for (int i = 0; i < 256 * 32; i++) plane[i] = vga_font_buf[i];
 
