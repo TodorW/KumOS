@@ -58,5 +58,7 @@ int  vga_get_row(void);
 void vga_scroll(void);
 void vga_put_hex(uint32_t val);
 void vga_put_dec(uint32_t val);
+void vga_font_snapshot(void);
+void vga_font_restore(void);
 
 #endif

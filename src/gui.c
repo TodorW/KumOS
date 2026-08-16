@@ -241,6 +241,7 @@ void gui_init(void) {
 void gui_exit(void) {
     vbe_write(VBE_IDX_ENABLE, VBE_DISABLED);
     set_mode3h();
+    vga_font_restore();
     vga_init();
     mouse_set_bounds(79, 24);
 }

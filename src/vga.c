@@ -72,6 +72,70 @@ static void outb(uint16_t port, uint8_t val) {
     __asm__ volatile ("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
+static uint8_t inb(uint16_t port) {
+    uint8_t val;
+    __asm__ volatile ("inb %1, %0" : "=a"(val) : "Nd"(port));
+    return val;
+}
+
+/* The BIOS loads the real CP437 text-mode font into plane 2 of VGA memory
+   before our kernel ever runs. gui.c's VBE linear-framebuffer mode reuses
+   that same physical VRAM for 32bpp pixel data, which clobbers plane 2's
+   font bitmaps as a side effect - so switching back to text mode 3h after
+   the GUI leaves the character generator full of garbage instead of
+   letters. Snapshotting the font here, once, while we're still in the
+   BIOS's original text mode (right after vga_init() at boot, before gui.c
+   ever touches VBE) and writing it back on gui_exit() fixes that instead
+   of trying to reconstruct CP437 glyphs by hand. */
+static uint8_t vga_font_buf[256 * 32];
+static int     vga_font_saved = 0;
+
+void vga_font_snapshot(void) {
+    volatile uint8_t *plane = (volatile uint8_t *)0xA0000;
+
+    outb(0x3C4, 0x02); uint8_t old_mm2 = inb(0x3C5);
+    outb(0x3C4, 0x04); uint8_t old_mem_mode = inb(0x3C5);
+    outb(0x3CE, 0x04); uint8_t old_read_map = inb(0x3CF);
+    outb(0x3CE, 0x05); uint8_t old_gmode = inb(0x3CF);
+
+    outb(0x3C4, 0x02); outb(0x3C5, 0x04);              /* plane 2 */
+    outb(0x3C4, 0x04); outb(0x3C5, (uint8_t)(old_mem_mode | 0x04)); /* sequential */
+    outb(0x3CE, 0x04); outb(0x3CF, 0x02);               /* read plane 2 */
+    outb(0x3CE, 0x05); outb(0x3CF, (uint8_t)(old_gmode & ~0x10));   /* no odd/even */
+
+    for (int i = 0; i < 256 * 32; i++) vga_font_buf[i] = plane[i];
+    vga_font_saved = 1;
+
+    outb(0x3C4, 0x02); outb(0x3C5, old_mm2);
+    outb(0x3C4, 0x04); outb(0x3C5, old_mem_mode);
+    outb(0x3CE, 0x04); outb(0x3CF, old_read_map);
+    outb(0x3CE, 0x05); outb(0x3CF, old_gmode);
+}
+
+void vga_font_restore(void) {
+    if (!vga_font_saved) return;
+    volatile uint8_t *plane = (volatile uint8_t *)0xA0000;
+
+    outb(0x3C4, 0x02); uint8_t old_mm2 = inb(0x3C5);
+    outb(0x3C4, 0x04); uint8_t old_mem_mode = inb(0x3C5);
+    outb(0x3CE, 0x04); uint8_t old_read_map = inb(0x3CF);
+    outb(0x3CE, 0x05); uint8_t old_gmode = inb(0x3CF);
+    outb(0x3CE, 0x06); uint8_t old_misc = inb(0x3CF);
+
+    outb(0x3C4, 0x02); outb(0x3C5, 0x04);              /* write plane 2 only */
+    outb(0x3C4, 0x04); outb(0x3C5, (uint8_t)(old_mem_mode | 0x04)); /* sequential */
+    outb(0x3CE, 0x05); outb(0x3CF, (uint8_t)(old_gmode & ~0x10));   /* no odd/even */
+    outb(0x3CE, 0x06); outb(0x3CF, (uint8_t)(old_misc & ~0x02));    /* map @ 0xA0000 */
+
+    for (int i = 0; i < 256 * 32; i++) plane[i] = vga_font_buf[i];
+
+    outb(0x3C4, 0x02); outb(0x3C5, old_mm2);
+    outb(0x3C4, 0x04); outb(0x3C5, old_mem_mode);
+    outb(0x3CE, 0x04); outb(0x3CF, old_read_map);
+    outb(0x3CE, 0x05); outb(0x3CF, old_gmode);
+    outb(0x3CE, 0x06); outb(0x3CF, old_misc);
+}
+
 void vga_set_cursor(int x, int y) {
     uint16_t pos = y * VGA_WIDTH + x;
     outb(0x3D4, 0x0F);

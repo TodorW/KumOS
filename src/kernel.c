@@ -1486,6 +1486,7 @@ static void dispatch(const char *line) {
 void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
 
     vga_init();
+    vga_font_snapshot();
     dmesg_init();
     dmesg_log("KumOS v1.9 booting");
 
