@@ -239,6 +239,21 @@ void gui_init(void) {
 }
 
 void gui_exit(void) {
+    /* Wipe the VBE linear framebuffer to black before disabling it.
+       Diagnosed live: non-blank characters render fine right after this
+       transition (a solid full-screen fill of 'A' came back pixel-perfect),
+       but blank/space cells specifically don't - a full-screen vga_clear()
+       shows a leftover "crosshatch" of stale pixels even though the actual
+       character+attribute bytes at 0xB8000 read back byte-correct through
+       the monitor. That points at QEMU's text-mode renderer skipping the
+       background re-fill for space cells and letting whatever's already on
+       the display surface show through - which right after a VBE session
+       is still last frame's GUI desktop. Zeroing the framebuffer while
+       still in VBE mode means that leftover is black instead of garbage. */
+    if (fb_ptr) {
+        uint32_t total = fb_pitch * GUI_HEIGHT;
+        for (uint32_t i = 0; i < total; i += 4) *(uint32_t*)(fb_ptr + i) = 0;
+    }
     vbe_write(VBE_IDX_ENABLE, VBE_DISABLED);
     set_mode3h();
     vga_font_restore();
