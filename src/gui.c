@@ -2125,6 +2125,25 @@ static uint8_t mine_revealed[MINE_ROWS][MINE_COLS];
 static uint8_t mine_flagged[MINE_ROWS][MINE_COLS];
 static int mine_started = 0;
 static int mine_over = 0;   /* 0 = playing, 1 = lost, 2 = won */
+static int mine_wins = 0;
+static int mine_wins_loaded = 0;
+
+/* Same tiny raw-int-file persistence as Snake/2048's high scores -
+   a win *count* rather than a score, but the same "4 bytes, one-shot
+   load" shape applies. */
+static void mine_load_wins(void) {
+    if (mine_wins_loaded) return;
+    mine_wins_loaded = 1;
+    uint8_t buf[4];
+    if (fat12_read("MINES.WIN", buf, 4) == 4)
+        mine_wins = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
+}
+
+static void mine_save_wins(void) {
+    uint8_t buf[4] = { (uint8_t)mine_wins, (uint8_t)(mine_wins>>8),
+                        (uint8_t)(mine_wins>>16), (uint8_t)(mine_wins>>24) };
+    fat12_write("MINES.WIN", buf, 4);
+}
 
 static void mine_reset(void) {
     for (int r=0;r<MINE_ROWS;r++)
@@ -2201,7 +2220,12 @@ static void mine_reveal(int r, int c) {
         return;
     }
     mine_flood(r, c);
-    if (mine_check_win()) { mine_over = 2; gui_beep(880, 30); }
+    if (mine_check_win()) {
+        mine_over = 2;
+        gui_beep(880, 30);
+        mine_wins++;
+        mine_save_wins();
+    }
 }
 
 static const uint8_t mine_num_color[9] = {
@@ -2210,6 +2234,7 @@ static const uint8_t mine_num_color[9] = {
 
 static void render_mine(winrec_t *w) {
     gui_window(w->x, w->y, w->w, w->h, "Minesweeper");
+    mine_load_wins();
     if (!mine_started) { mine_reset(); mine_started = 1; }
 
     int cx0 = w->x+4, cy0 = w->y+14;
@@ -2252,6 +2277,11 @@ static void render_mine(winrec_t *w) {
         gui_puts(cx0, by+10, "Cleared! Press R to play again", C_LIGHT_GREEN, C_WIN_BG);
     else
         gui_puts(cx0, by+10, "Left: dig  Right: flag", C_DARK_GREY, C_WIN_BG);
+
+    char winsbuf[16] = "Wins: ";
+    kitoa((uint32_t)mine_wins, nb, 10);
+    kstrcat(winsbuf, nb);
+    gui_puts(cx0, by+20, winsbuf, C_DARK_GREY, C_WIN_BG);
 }
 
 static void mine_handle_click(winrec_t *w, int mx, int my) {
