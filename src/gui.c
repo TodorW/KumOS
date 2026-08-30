@@ -2543,6 +2543,10 @@ void gui_run(void) {
                 else running = 0;
             } else if (key == '\t' && keyboard_alt_held()) {
                 wm_cycle_focus();
+            } else if (key == 's' && keyboard_ctrl_held() && top == WIN_EDITOR) {
+                editor_save();
+            } else if (key == 's' && keyboard_ctrl_held() && top == WIN_WRITE) {
+                write_save();
             } else if (top >= WIN_TERMINAL && top <= WIN_TERMINAL3) {
                 term_cur = top - WIN_TERMINAL;
                 if (key == '\n') {
