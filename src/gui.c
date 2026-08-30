@@ -811,7 +811,8 @@ void gui_draw_desktop(void) {
     gui_icon(8, ICON_START_Y + 9*ICON_SLOT, "Snake", C_GREEN,      ICON_SNAKE);
     gui_icon(8, ICON_START_Y + 10*ICON_SLOT, "Piano", C_PURPLE,    ICON_PIANO);
     gui_icon(8, ICON_START_Y + 11*ICON_SLOT, "2048",  C_ORANGE,    ICON_2048);
-    gui_icon(8, ICON_START_Y + 12*ICON_SLOT, "Exit",  C_DARK_GREY, ICON_EXIT);
+    gui_icon(8, ICON_START_Y + 12*ICON_SLOT, "Mines", C_LIGHT_GREY,ICON_MINE);
+    gui_icon(8, ICON_START_Y + 13*ICON_SLOT, "Exit",  C_DARK_GREY, ICON_EXIT);
 
     gui_printf(52, 18, C_LIGHT_GREY, C_DESKTOP,
                "Click icons to open apps");
@@ -2267,6 +2268,7 @@ static int launcher_build(launch_item_t *items, int max) {
     if (n<max) items[n++] = (launch_item_t){"Snake",          ICON_SNAKE,   WIN_SNAKE,    0, 0};
     if (n<max) items[n++] = (launch_item_t){"Piano",          ICON_PIANO,   WIN_PIANO,    0, 0};
     if (n<max) items[n++] = (launch_item_t){"2048",           ICON_2048,    WIN_2048,     0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Minesweeper",    ICON_MINE,    WIN_MINE,     0, 0};
     int total = pkgwin_total();
     for (int i=0;i<total && n<max;i++) {
         if (!pkgwin_installed(i)) continue;
@@ -2294,6 +2296,7 @@ static void launcher_open_wintype(int t) {
         case WIN_SNAKE:    wm_open(WIN_SNAKE,   400, 200, 220, 216);       break;
         case WIN_PIANO:    wm_open(WIN_PIANO,   420, 300, 240, 150);       break;
         case WIN_2048:     wm_open(WIN_2048,    460, 150, 220, 260);       break;
+        case WIN_MINE:     wm_open(WIN_MINE,    430, 140, 160, 190);       break;
     }
 }
 
@@ -2408,6 +2411,7 @@ void gui_run(void) {
             else if (t==WIN_SNAKE) render_snake(w);
             else if (t==WIN_PIANO) render_piano(w);
             else if (t==WIN_2048) render_2048(w);
+            else if (t==WIN_MINE) render_mine(w);
         }
 
         gui_draw_taskbar();
@@ -2536,6 +2540,7 @@ void gui_run(void) {
                 if (w->active && !w->minimized && point_in(mx,my,w->x,w->y,w->w,w->h)) hitw = t;
             }
             if (hitw < 0) { ctxmenu_open = 1; ctxmenu_x = mx; ctxmenu_y = my; }
+            else if (hitw == WIN_MINE) mine_handle_rightclick(&wins[hitw], mx, my);
         }
         prev_right = right_now;
 
@@ -2594,6 +2599,8 @@ void gui_run(void) {
                     paint_handle_click(w, mx, my);
                 } else if (hit == WIN_PIANO) {
                     piano_handle_click(w, mx, my);
+                } else if (hit == WIN_MINE) {
+                    mine_handle_click(w, mx, my);
                 }
             } else if (my < 10 && mx < 33) {
                 launcher_open = 1;
@@ -2618,7 +2625,8 @@ void gui_run(void) {
                 else if (iconidx==9) wm_open(WIN_SNAKE,   400, 200, 220, 216);
                 else if (iconidx==10) wm_open(WIN_PIANO,  420, 300, 240, 150);
                 else if (iconidx==11) wm_open(WIN_2048,   460, 150, 220, 260);
-                else if (iconidx==12) running = 0;
+                else if (iconidx==12) wm_open(WIN_MINE,   430, 140, 160, 190);
+                else if (iconidx==13) running = 0;
             }
         }
 
