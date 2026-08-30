@@ -1785,6 +1785,27 @@ static int      snake_score = 0;
 static int      snake_over = 0;
 static int      snake_started = 0;
 static uint32_t snake_last_tick = 0;
+static int      snake_hi = 0;
+static int      snake_hi_loaded = 0;
+
+/* Best score persisted as 4 raw little-endian bytes in a tiny file -
+   simplest possible on-disk format for a single int, no need for
+   anything more structured. Loaded once (guarded by snake_hi_loaded,
+   same one-shot-init shape render_snake() already uses for
+   snake_started) rather than re-reading the disk every frame. */
+static void snake_load_hi(void) {
+    if (snake_hi_loaded) return;
+    snake_hi_loaded = 1;
+    uint8_t buf[4];
+    if (fat12_read("SNAKE.HI", buf, 4) == 4)
+        snake_hi = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
+}
+
+static void snake_save_hi(void) {
+    uint8_t buf[4] = { (uint8_t)snake_hi, (uint8_t)(snake_hi>>8),
+                        (uint8_t)(snake_hi>>16), (uint8_t)(snake_hi>>24) };
+    fat12_write("SNAKE.HI", buf, 4);
+}
 
 static void snake_place_food(void) {
     for (;;) {
@@ -1809,12 +1830,17 @@ static void snake_reset(void) {
     snake_place_food();
 }
 
+static void snake_die(void) {
+    snake_over = 1;
+    if (snake_score > snake_hi) { snake_hi = snake_score; snake_save_hi(); }
+}
+
 static void snake_step(void) {
     int nx = snake_body[0].x + snake_dx;
     int ny = snake_body[0].y + snake_dy;
-    if (nx<0 || nx>=SNAKE_COLS || ny<0 || ny>=SNAKE_ROWS) { snake_over = 1; return; }
+    if (nx<0 || nx>=SNAKE_COLS || ny<0 || ny>=SNAKE_ROWS) { snake_die(); return; }
     for (int i=0;i<snake_len;i++)
-        if (snake_body[i].x==nx && snake_body[i].y==ny) { snake_over = 1; return; }
+        if (snake_body[i].x==nx && snake_body[i].y==ny) { snake_die(); return; }
 
     int grow = (nx==snake_food_x && ny==snake_food_y);
     int new_len = grow ? snake_len+1 : snake_len;
@@ -1829,6 +1855,7 @@ static void snake_step(void) {
 
 static void render_snake(winrec_t *w) {
     gui_window(w->x, w->y, w->w, w->h, "Snake");
+    snake_load_hi();
     if (!snake_started) { snake_reset(); snake_started = 1; }
 
     if (!snake_over && timer_ticks() - snake_last_tick >= 15) {
@@ -1851,6 +1878,9 @@ static void render_snake(winrec_t *w) {
 
     char scorebuf[24] = "Score: ";
     char nb[12]; kitoa((uint32_t)snake_score, nb, 10);
+    kstrcat(scorebuf, nb);
+    kstrcat(scorebuf, "  Best: ");
+    kitoa((uint32_t)snake_hi, nb, 10);
     kstrcat(scorebuf, nb);
     gui_puts(cx0, cy0+ch+4, scorebuf, C_WHITE, C_WIN_BG);
     if (snake_over)
