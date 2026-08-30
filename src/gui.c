@@ -545,7 +545,7 @@ void gui_icon(int x, int y, const char *label, uint8_t icon_color, icon_kind_t k
 
     fill_rounded(x+1, y+1, 30, 22, C_SHADOW);
     fill_rounded(x, y, 30, 22, icon_color);
-    outline_rounded(x, y, 30, 22, C_WIN_BORDER);
+    outline_rounded(x, y, 30, 22, gui_hover(x, y, 30, 22) ? C_WHITE : C_WIN_BORDER);
 
     icon_glyph(x+5, y+4, kind);
 
