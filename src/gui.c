@@ -1518,11 +1518,7 @@ static void render_write(winrec_t *w) {
 
     int cy = w->y + 12;
     gui_puts(w->x+3, cy+2, "File:", C_DARK_GREY, C_WIN_BG);
-    gui_rect_fill(w->x+34, cy, 120, 12, C_WHITE);
-    gui_rect(w->x+34, cy, 120, 12, write_editing_name ? C_NAVY : C_LIGHT_GREY);
-    gui_puts(w->x+36, cy+2, write_filename, C_BLACK, C_WHITE);
-    if (write_editing_name && (timer_ticks()/50) & 1)
-        gui_rect_fill(w->x+36+(int)kstrlen(write_filename)*8, cy+1, 6, 9, C_LIGHT_GREY);
+    gui_textfield_draw(w->x+34, cy, 120, 12, write_filename, write_editing_name);
 
     gui_button(w->x+158, cy, 36, 12, "New",  gui_pressed(w->x+158, cy, 36, 12));
     gui_button(w->x+196, cy, 40, 12, "Open", gui_pressed(w->x+196, cy, 40, 12));
@@ -2505,15 +2501,8 @@ void gui_run(void) {
                 }
             } else if (top == WIN_WRITE) {
                 if (write_editing_name) {
-                    if (key == '\n') {
-                        write_editing_name = 0;
-                    } else if (key == '\b') {
-                        int n = (int)kstrlen(write_filename);
-                        if (n > 0) write_filename[n-1] = 0;
-                    } else if (key >= 32 && (uint8_t)key < 127) {
-                        int n = (int)kstrlen(write_filename);
-                        if (n < WRITE_NAME_MAX-1) { write_filename[n] = key; write_filename[n+1] = 0; }
-                    }
+                    if (key == '\n') write_editing_name = 0;
+                    else gui_textfield_key(write_filename, WRITE_NAME_MAX, key);
                 } else if (key == '\n') {
                     if (write_row < WRITE_ROWS-1) {
                         write_row++; write_col = 0; write_lines[write_row][0] = 0;
