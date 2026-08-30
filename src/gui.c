@@ -2062,6 +2062,21 @@ static void render_mine(winrec_t *w) {
         gui_puts(cx0, by+10, "Left: dig  Right: flag", C_DARK_GREY, C_WIN_BG);
 }
 
+static void mine_handle_click(winrec_t *w, int mx, int my) {
+    int cx0 = w->x+4, cy0 = w->y+14;
+    int c = (mx-cx0)/MINE_CELL, r = (my-cy0)/MINE_CELL;
+    if (r<0||r>=MINE_ROWS||c<0||c>=MINE_COLS) return;
+    mine_reveal(r, c);
+}
+
+static void mine_handle_rightclick(winrec_t *w, int mx, int my) {
+    int cx0 = w->x+4, cy0 = w->y+14;
+    int c = (mx-cx0)/MINE_CELL, r = (my-cy0)/MINE_CELL;
+    if (r<0||r>=MINE_ROWS||c<0||c>=MINE_COLS) return;
+    if (mine_over || mine_revealed[r][c]) return;
+    mine_flagged[r][c] = !mine_flagged[r][c];
+}
+
 static int  pkg_selected = -1;
 static char pkg_status[24] = "";
 
@@ -2508,6 +2523,8 @@ void gui_run(void) {
                 else if (!g2048_over && key == KEY_RIGHT) g2048_move(1);
                 else if (!g2048_over && key == KEY_UP)    g2048_move(2);
                 else if (!g2048_over && key == KEY_DOWN)  g2048_move(3);
+            } else if (top == WIN_MINE) {
+                if (key=='r' || key=='R') mine_reset();
             }
         }
 
