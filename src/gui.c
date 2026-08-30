@@ -1515,17 +1515,23 @@ static void render_editor(winrec_t *w) {
     gui_puts(w->x+94, w->y+w->h-14, editor_status, C_DARK_GREY, C_WIN_BG);
 }
 
+/* Pulled out of the Save button's click handler so Ctrl+S can call the
+   exact same save logic without duplicating it. */
+static void editor_save(void) {
+    char buf[EDIT_ROWS*(EDIT_COLS+1)]; int n=0;
+    for (int i=0;i<=editor_row;i++) {
+        const char *p = editor_lines[i];
+        while (*p) buf[n++] = *p++;
+        if (i < editor_row) buf[n++] = '\n';
+    }
+    if (!fat12_mounted()) kstrcpy(editor_status, "No disk");
+    else if (fat12_write("NOTES.TXT", buf, (uint32_t)n) == 0) kstrcpy(editor_status, "Saved!");
+    else kstrcpy(editor_status, "Save failed");
+}
+
 static void editor_handle_click(winrec_t *w, int mx, int my) {
     if (point_in(mx, my, w->x+4, w->y+w->h-16, 40, 12)) {
-        char buf[EDIT_ROWS*(EDIT_COLS+1)]; int n=0;
-        for (int i=0;i<=editor_row;i++) {
-            const char *p = editor_lines[i];
-            while (*p) buf[n++] = *p++;
-            if (i < editor_row) buf[n++] = '\n';
-        }
-        if (!fat12_mounted()) kstrcpy(editor_status, "No disk");
-        else if (fat12_write("NOTES.TXT", buf, (uint32_t)n) == 0) kstrcpy(editor_status, "Saved!");
-        else kstrcpy(editor_status, "Save failed");
+        editor_save();
     } else if (point_in(mx, my, w->x+48, w->y+w->h-16, 40, 12)) {
         if (!fat12_mounted()) { kstrcpy(editor_status, "No disk"); return; }
         uint8_t fbuf[EDIT_ROWS*(EDIT_COLS+1)];
@@ -1617,6 +1623,22 @@ static void render_write(winrec_t *w) {
     gui_puts(w->x+3, w->y+w->h-10, statline, C_DARK_GREY, C_WIN_BG);
 }
 
+/* Pulled out of the Save button's click handler so Ctrl+S can call the
+   exact same save logic without duplicating it (same reasoning as
+   editor_save() above). */
+static void write_save(void) {
+    if (!write_filename[0]) { kstrcpy(write_status, "Need a filename"); return; }
+    char buf[WRITE_ROWS*(WRITE_COLS+1)]; int n=0;
+    for (int i=0;i<=write_row;i++) {
+        const char *p = write_lines[i];
+        while (*p) buf[n++] = *p++;
+        if (i < write_row) buf[n++] = '\n';
+    }
+    if (!fat12_mounted()) kstrcpy(write_status, "No disk");
+    else if (fat12_write(write_filename, buf, (uint32_t)n) == 0) kstrcpy(write_status, "Saved!");
+    else kstrcpy(write_status, "Save failed");
+}
+
 static void write_handle_click(winrec_t *w, int mx, int my) {
     int cy = w->y + 12;
     if (point_in(mx, my, w->x+34, cy, 120, 12)) { write_editing_name = 1; return; }
@@ -1644,16 +1666,7 @@ static void write_handle_click(winrec_t *w, int mx, int my) {
         }
         kstrcpy(write_status, "Loaded!");
     } else if (point_in(mx, my, w->x+238, cy, 36, 12)) {
-        if (!write_filename[0]) { kstrcpy(write_status, "Need a filename"); return; }
-        char buf[WRITE_ROWS*(WRITE_COLS+1)]; int n=0;
-        for (int i=0;i<=write_row;i++) {
-            const char *p = write_lines[i];
-            while (*p) buf[n++] = *p++;
-            if (i < write_row) buf[n++] = '\n';
-        }
-        if (!fat12_mounted()) kstrcpy(write_status, "No disk");
-        else if (fat12_write(write_filename, buf, (uint32_t)n) == 0) kstrcpy(write_status, "Saved!");
-        else kstrcpy(write_status, "Save failed");
+        write_save();
     }
 }
 
