@@ -2012,6 +2012,56 @@ static void mine_reveal(int r, int c) {
     if (mine_check_win()) mine_over = 2;
 }
 
+static const uint8_t mine_num_color[9] = {
+    C_BLACK, C_BLUE, C_LIGHT_GREEN, C_RED, C_NAVY, C_BROWN, C_TEAL, C_BLACK, C_DARK_GREY
+};
+
+static void render_mine(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "Minesweeper");
+    if (!mine_started) { mine_reset(); mine_started = 1; }
+
+    int cx0 = w->x+4, cy0 = w->y+14;
+    int flagged = 0;
+    for (int r=0;r<MINE_ROWS;r++) {
+        for (int c=0;c<MINE_COLS;c++) {
+            int tx = cx0 + c*MINE_CELL, ty = cy0 + r*MINE_CELL;
+            if (mine_flagged[r][c]) flagged++;
+
+            if (!mine_revealed[r][c]) {
+                gui_rect_fill(tx, ty, MINE_CELL-1, MINE_CELL-1, C_LIGHT_GREY);
+                gui_rect(tx, ty, MINE_CELL-1, MINE_CELL-1, C_DARK_GREY);
+                if (mine_flagged[r][c]) {
+                    gui_vline(tx+7, ty+3, 9, C_BLACK);
+                    gui_rect_fill(tx+4, ty+3, 5, 4, C_RED);
+                }
+            } else if (mine_board[r][c] == -1) {
+                gui_rect_fill(tx, ty, MINE_CELL-1, MINE_CELL-1, C_RED);
+                gui_rect_fill(tx+5, ty+5, 5, 5, C_BLACK);
+            } else {
+                gui_rect_fill(tx, ty, MINE_CELL-1, MINE_CELL-1, C_WIN_BG);
+                gui_rect(tx, ty, MINE_CELL-1, MINE_CELL-1, C_DARK_GREY);
+                int v = mine_board[r][c];
+                if (v > 0) {
+                    char nb[2] = { (char)('0'+v), 0 };
+                    gui_puts(tx+5, ty+4, nb, mine_num_color[v], C_WIN_BG);
+                }
+            }
+        }
+    }
+
+    int by = cy0 + MINE_ROWS*MINE_CELL + 4;
+    char statusbuf[24] = "Mines left: ";
+    char nb[12]; kitoa((uint32_t)(MINE_MINES-flagged), nb, 10);
+    kstrcat(statusbuf, nb);
+    gui_puts(cx0, by, statusbuf, C_WHITE, C_WIN_BG);
+    if (mine_over == 1)
+        gui_puts(cx0, by+10, "Boom - press R to retry", C_LIGHT_RED, C_WIN_BG);
+    else if (mine_over == 2)
+        gui_puts(cx0, by+10, "Cleared! Press R to play again", C_LIGHT_GREEN, C_WIN_BG);
+    else
+        gui_puts(cx0, by+10, "Left: dig  Right: flag", C_DARK_GREY, C_WIN_BG);
+}
+
 static int  pkg_selected = -1;
 static char pkg_status[24] = "";
 
