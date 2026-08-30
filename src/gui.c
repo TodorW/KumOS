@@ -2762,6 +2762,21 @@ void gui_run(void) {
             if (nx+w->w > GUI_WIDTH)  nx = GUI_WIDTH-w->w;
             if (ny+w->h > GUI_HEIGHT) ny = GUI_HEIGHT-w->h;
             w->x = nx; w->y = ny;
+        } else if (!left_now && dragging >= 0) {
+            /* Aero-Snap-style drop-at-the-edge: released against the
+               very left or right of the screen while dragging a
+               titlebar snaps that window to a half-screen tile, same
+               spirit as double-click-maximize but triggered by drag
+               position instead of a click count. No saved "pre-snap"
+               geometry (unlike wm_toggle_maximize) - dragging the
+               titlebar back away from the edge is already how you'd
+               undo a normal move, so a second mechanism isn't needed. */
+            winrec_t *w = &wins[dragging];
+            if (mx <= 1) {
+                w->x = 0; w->y = 10; w->w = GUI_WIDTH/2; w->h = GUI_HEIGHT-10;
+            } else if (mx >= GUI_WIDTH-2) {
+                w->x = GUI_WIDTH/2; w->y = 10; w->w = GUI_WIDTH/2; w->h = GUI_HEIGHT-10;
+            }
         }
         if (!left_now) dragging = -1;
 
