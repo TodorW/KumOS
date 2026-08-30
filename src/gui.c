@@ -2427,7 +2427,13 @@ static void browser_handle_click(winrec_t *w, int mx, int my) {
 
 #define LAUNCH_ROW_H 16
 #define LAUNCH_W     168
-#define LAUNCH_MAX   16
+/* 13 built-in apps alone now exceed the old cap of 16 once even a
+   handful of installed packages are added on top - this was silently
+   truncating the launcher on a disk with most of the embedded packages
+   already present (confirmed: 13 built-ins + up to 17 embedded packages
+   left only ~3 package slots before the old cap cut the rest). Room for
+   plenty of headroom past what's installed today. */
+#define LAUNCH_MAX   48
 
 typedef struct { const char *label; icon_kind_t icon; int wintype; int is_pkg; int pkg_idx; } launch_item_t;
 
