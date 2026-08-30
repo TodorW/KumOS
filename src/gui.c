@@ -1938,6 +1938,25 @@ static int g2048_board[4][4];
 static int g2048_score = 0;
 static int g2048_over  = 0;
 static int g2048_started = 0;
+static int g2048_hi = 0;
+static int g2048_hi_loaded = 0;
+
+/* Same tiny raw-int-file persistence as Snake's snake_load_hi()/
+   snake_save_hi() - not worth a shared helper for two 6-line functions
+   differing only in filename and variable name. */
+static void g2048_load_hi(void) {
+    if (g2048_hi_loaded) return;
+    g2048_hi_loaded = 1;
+    uint8_t buf[4];
+    if (fat12_read("2048.HI", buf, 4) == 4)
+        g2048_hi = buf[0] | (buf[1]<<8) | (buf[2]<<16) | (buf[3]<<24);
+}
+
+static void g2048_save_hi(void) {
+    uint8_t buf[4] = { (uint8_t)g2048_hi, (uint8_t)(g2048_hi>>8),
+                        (uint8_t)(g2048_hi>>16), (uint8_t)(g2048_hi>>24) };
+    fat12_write("2048.HI", buf, 4);
+}
 
 static void g2048_spawn(void) {
     int er[16], ec[16], n=0;
@@ -2012,7 +2031,10 @@ static void g2048_move(int dir) {
     }
     if (changed_any) {
         g2048_spawn();
-        if (g2048_no_moves_left()) g2048_over = 1;
+        if (g2048_no_moves_left()) {
+            g2048_over = 1;
+            if (g2048_score > g2048_hi) { g2048_hi = g2048_score; g2048_save_hi(); }
+        }
     }
 }
 
@@ -2038,6 +2060,7 @@ static uint8_t g2048_tile_color(int v) {
 
 static void render_2048(winrec_t *w) {
     gui_window(w->x, w->y, w->w, w->h, "2048");
+    g2048_load_hi();
     if (!g2048_started) { g2048_reset(); g2048_started = 1; }
 
     int cx0 = w->x+6, cy0 = w->y+16;
@@ -2060,6 +2083,9 @@ static void render_2048(winrec_t *w) {
     int by = cy0 + 4*(G2048_CELL+G2048_GAP) + 4;
     char scorebuf[24] = "Score: ";
     char nb[12]; kitoa((uint32_t)g2048_score, nb, 10);
+    kstrcat(scorebuf, nb);
+    kstrcat(scorebuf, "  Best: ");
+    kitoa((uint32_t)g2048_hi, nb, 10);
     kstrcat(scorebuf, nb);
     gui_puts(cx0, by, scorebuf, C_WHITE, C_WIN_BG);
     if (g2048_over)
