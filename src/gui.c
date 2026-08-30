@@ -727,6 +727,11 @@ static void wm_close(int t) {
     wm_remove_z(t);
 }
 
+static void wm_close_all(void) {
+    for (int t=0;t<WIN_COUNT;t++)
+        if (wins[t].active) wm_close(t);
+}
+
 /* Double-click-the-titlebar maximize, toggling back to whatever geometry
    the window had before - the rx/ry/rw/rh fields exist on winrec_t only
    to remember that one prior state. */
@@ -2420,12 +2425,12 @@ static int launcher_hit(int mx, int my, int n) {
 }
 
 #define CTXMENU_ROW_H 16
-#define CTXMENU_W     140
-#define CTXMENU_ITEMS 3
+#define CTXMENU_W     160
+#define CTXMENU_ITEMS 4
 
 static int ctxmenu_open = 0;
 static int ctxmenu_x = 0, ctxmenu_y = 0;
-static const char *ctxmenu_labels[CTXMENU_ITEMS] = {"New Terminal","Cascade Windows","Tile Windows"};
+static const char *ctxmenu_labels[CTXMENU_ITEMS] = {"New Terminal","Cascade Windows","Tile Windows","Close All Windows"};
 
 static void ctxmenu_rect(int *x, int *y, int *h) {
     *h = CTXMENU_ITEMS*CTXMENU_ROW_H + 6;
@@ -2626,6 +2631,7 @@ void gui_run(void) {
             if (row == 0) wm_open_new_terminal();
             else if (row == 1) wm_cascade();
             else if (row == 2) wm_tile();
+            else if (row == 3) wm_close_all();
         } else if (left_now && !prev_left && launcher_open) {
             launch_item_t items[LAUNCH_MAX];
             int n = launcher_build(items, LAUNCH_MAX);
