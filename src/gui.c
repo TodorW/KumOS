@@ -1281,6 +1281,8 @@ static void render_files(winrec_t *w) {
     } else {
         gui_printf(cx, cy, C_YELLOW, C_BLACK, "%s", files_entries[files_selected].name);
         gui_puts(cx, cy+10, files_previewbuf, C_LIGHT_GREEN, C_BLACK);
+        gui_button(w->x+w->w-78, w->y+w->h-14, 34, 11, "Del",
+                   gui_pressed(w->x+w->w-78, w->y+w->h-14, 34, 11));
         gui_button(w->x+w->w-40, w->y+w->h-14, 34, 11, "Back",
                    gui_pressed(w->x+w->w-40, w->y+w->h-14, 34, 11));
     }
@@ -1304,8 +1306,12 @@ static void files_handle_click(winrec_t *w, int mx, int my) {
             }
         }
     } else {
-        if (point_in(mx, my, w->x+w->w-40, w->y+w->h-14, 34, 11))
+        if (point_in(mx, my, w->x+w->w-78, w->y+w->h-14, 34, 11)) {
+            fat12_delete(files_entries[files_selected].name);
+            files_refresh();
+        } else if (point_in(mx, my, w->x+w->w-40, w->y+w->h-14, 34, 11)) {
             files_preview = 0;
+        }
     }
 }
 
