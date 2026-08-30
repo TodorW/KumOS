@@ -2065,10 +2065,11 @@ static void mine_reveal(int r, int c) {
     if (mine_board[r][c] == -1) {
         mine_revealed[r][c] = 1;
         mine_over = 1;
+        gui_beep(110, 40);
         return;
     }
     mine_flood(r, c);
-    if (mine_check_win()) mine_over = 2;
+    if (mine_check_win()) { mine_over = 2; gui_beep(880, 30); }
 }
 
 static const uint8_t mine_num_color[9] = {
