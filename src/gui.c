@@ -1360,7 +1360,7 @@ static void render_sysmon(winrec_t *w) {
     int cur = sched_current_index();
     for (int i=0;i<sched_task_count() && shown<maxrows;i++) {
         task_t *t = sched_task_at(i);
-        if (!t) continue;
+        if (!t || t->state == TASK_DEAD || t->state == TASK_ZOMBIE) continue;
         uint8_t fg = (i==cur) ? C_LIGHT_GREEN : C_LIGHT_GREY;
         gui_printf(cx,cy,fg,C_BLACK,"%d %s", t->pid, t->name);
         cy += 9; shown++;
@@ -1368,12 +1368,14 @@ static void render_sysmon(winrec_t *w) {
 }
 
 /* Recomputes exactly where render_sysmon() put each task row (same
-   header-line count, same net-status branch) so a click can be mapped
-   back to the task it landed on - kept in one place rather than a
-   second copy of the header layout, since only the click path needs to
-   know the row's full width for a hit test, not draw anything. Skips
-   pid 0 (idle/kernel) and the caller's own task (this GUI) - killing
-   either would take the whole desktop down with it. */
+   header-line count, same net-status branch, same dead/zombie filter -
+   a killed task's row has to stop being clickable at the same moment it
+   stops being drawn) so a click can be mapped back to the task it
+   landed on - kept in one place rather than a second copy of the header
+   layout, since only the click path needs to know the row's full width
+   for a hit test, not draw anything. Skips pid 0 (idle/kernel) and the
+   caller's own task (this GUI) - killing either would take the whole
+   desktop down with it. */
 static void sysmon_handle_click(winrec_t *w, int mx, int my) {
     int cy = w->y + 14 + 9*5;
     cy += net_ready() ? 9*2 : 9;
@@ -1383,7 +1385,7 @@ static void sysmon_handle_click(winrec_t *w, int mx, int my) {
     int cur = sched_current_index();
     for (int i=0;i<sched_task_count() && shown<maxrows;i++) {
         task_t *t = sched_task_at(i);
-        if (!t) continue;
+        if (!t || t->state == TASK_DEAD || t->state == TASK_ZOMBIE) continue;
         if (point_in(mx, my, w->x+1, cy-1, w->w-2, 9)) {
             if (t->pid != 0 && i != cur) signal_send(t->pid, SIGTERM);
             return;
