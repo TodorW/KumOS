@@ -619,6 +619,18 @@ static uint32_t gui_rand(void) {
     return gui_rng_state;
 }
 
+/* A one-shot beep that doesn't block the GUI loop, unlike speaker_beep()
+   which sleeps for its whole duration - Piano proved speaker_on/off can
+   be driven non-blockingly (there, tied to mouse press/release), this
+   just ties the "off" half to a future tick instead of an input event,
+   for game win/lose cues where there's no natural release to hook. */
+static uint32_t gui_beep_off_at = 0;
+
+static void gui_beep(uint32_t freq_hz, uint32_t dur_ticks) {
+    speaker_on(freq_hz);
+    gui_beep_off_at = timer_ticks() + dur_ticks;
+}
+
 #define ICON_START_Y 16
 #define ICON_SLOT    38
 
@@ -2708,6 +2720,11 @@ void gui_run(void) {
         if (!left_now && piano_active >= 0) {
             speaker_off();
             piano_active = -1;
+        }
+
+        if (gui_beep_off_at && timer_ticks() >= gui_beep_off_at) {
+            speaker_off();
+            gui_beep_off_at = 0;
         }
 
         prev_left = left_now;
