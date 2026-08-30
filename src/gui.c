@@ -1639,6 +1639,30 @@ static void write_save(void) {
     else kstrcpy(write_status, "Save failed");
 }
 
+static void write_new(void) {
+    write_init_buf();
+    kstrcpy(write_status, "New doc");
+}
+
+static void write_open(void) {
+    if (!fat12_mounted()) { kstrcpy(write_status, "No disk"); return; }
+    uint8_t fbuf[WRITE_ROWS*(WRITE_COLS+1)];
+    int n = fat12_read(write_filename, fbuf, sizeof(fbuf)-1);
+    if (n < 0) { kstrcpy(write_status, "Not found"); return; }
+    fbuf[n] = 0;
+    write_init_buf();
+    char *p = (char*)fbuf;
+    while (*p && write_row < WRITE_ROWS) {
+        if (*p == '\n') { write_row++; write_col = 0; p++; continue; }
+        if (write_col < WRITE_COLS-1) {
+            write_lines[write_row][write_col++] = *p;
+            write_lines[write_row][write_col] = 0;
+        }
+        p++;
+    }
+    kstrcpy(write_status, "Loaded!");
+}
+
 static void write_handle_click(winrec_t *w, int mx, int my) {
     int cy = w->y + 12;
     if (point_in(mx, my, w->x+34, cy, 120, 12)) { write_editing_name = 1; return; }
@@ -1646,25 +1670,9 @@ static void write_handle_click(winrec_t *w, int mx, int my) {
     write_status[0] = 0;
 
     if (point_in(mx, my, w->x+158, cy, 36, 12)) {
-        write_init_buf();
-        kstrcpy(write_status, "New doc");
+        write_new();
     } else if (point_in(mx, my, w->x+196, cy, 40, 12)) {
-        if (!fat12_mounted()) { kstrcpy(write_status, "No disk"); return; }
-        uint8_t fbuf[WRITE_ROWS*(WRITE_COLS+1)];
-        int n = fat12_read(write_filename, fbuf, sizeof(fbuf)-1);
-        if (n < 0) { kstrcpy(write_status, "Not found"); return; }
-        fbuf[n] = 0;
-        write_init_buf();
-        char *p = (char*)fbuf;
-        while (*p && write_row < WRITE_ROWS) {
-            if (*p == '\n') { write_row++; write_col = 0; p++; continue; }
-            if (write_col < WRITE_COLS-1) {
-                write_lines[write_row][write_col++] = *p;
-                write_lines[write_row][write_col] = 0;
-            }
-            p++;
-        }
-        kstrcpy(write_status, "Loaded!");
+        write_open();
     } else if (point_in(mx, my, w->x+238, cy, 36, 12)) {
         write_save();
     }
