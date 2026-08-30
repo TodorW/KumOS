@@ -1968,6 +1968,50 @@ static void mine_reset(void) {
         }
 }
 
+/* Iterative flood fill (explicit stack, not recursion - kernel stacks
+   here are small and 81 cells is nothing to just loop over) - reveals
+   a 0-count cell's whole connected blank region plus its numbered
+   border, the standard minesweeper "click an empty area" behavior. */
+static void mine_flood(int r0, int c0) {
+    /* each of the up to ROWS*COLS cells can push up to 8 neighbors before
+       it's marked revealed and future pushes of it are filtered out at
+       pop time, so the stack needs room for that fan-out, not just one
+       slot per cell. */
+    int sr[MINE_ROWS*MINE_COLS*9], sc[MINE_ROWS*MINE_COLS*9], sp = 0;
+    sr[sp]=r0; sc[sp]=c0; sp++;
+    while (sp > 0) {
+        sp--;
+        int r = sr[sp], c = sc[sp];
+        if (r<0||r>=MINE_ROWS||c<0||c>=MINE_COLS) continue;
+        if (mine_revealed[r][c] || mine_flagged[r][c]) continue;
+        mine_revealed[r][c] = 1;
+        if (mine_board[r][c] != 0) continue;
+        for (int dr=-1;dr<=1;dr++)
+            for (int dc=-1;dc<=1;dc++) {
+                if (!dr && !dc) continue;
+                sr[sp]=r+dr; sc[sp]=c+dc; sp++;
+            }
+    }
+}
+
+static int mine_check_win(void) {
+    for (int r=0;r<MINE_ROWS;r++)
+        for (int c=0;c<MINE_COLS;c++)
+            if (mine_board[r][c] != -1 && !mine_revealed[r][c]) return 0;
+    return 1;
+}
+
+static void mine_reveal(int r, int c) {
+    if (mine_over || mine_flagged[r][c] || mine_revealed[r][c]) return;
+    if (mine_board[r][c] == -1) {
+        mine_revealed[r][c] = 1;
+        mine_over = 1;
+        return;
+    }
+    mine_flood(r, c);
+    if (mine_check_win()) mine_over = 2;
+}
+
 static int  pkg_selected = -1;
 static char pkg_status[24] = "";
 
