@@ -600,7 +600,7 @@ static uint32_t gui_rand(void) {
 typedef enum {
     WIN_TERMINAL=0, WIN_TERMINAL2=1, WIN_TERMINAL3=2, WIN_FILES=3, WIN_SYSMON=4,
     WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_WRITE=9, WIN_PAINT=10, WIN_SNAKE=11,
-    WIN_PIANO=12, WIN_2048=13, WIN_COUNT=14
+    WIN_PIANO=12, WIN_2048=13, WIN_MINE=14, WIN_COUNT=15
 } wintype_t;
 
 typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
@@ -625,6 +625,7 @@ static const char *win_title(int t) {
         case WIN_SNAKE:    return "Snake";
         case WIN_PIANO:    return "Piano";
         case WIN_2048:     return "2048";
+        case WIN_MINE:     return "Minesweeper";
     }
     return "";
 }
@@ -1916,6 +1917,55 @@ static void render_2048(winrec_t *w) {
         gui_puts(cx0, by+10, "Game over - press R", C_LIGHT_RED, C_WIN_BG);
     else
         gui_puts(cx0, by+10, "Arrow keys to slide", C_DARK_GREY, C_WIN_BG);
+}
+
+/* Minesweeper - classic 9x9/10-mine board. mine_board[r][c] is -1 for a
+   mine, else the count of mines in the 8 surrounding cells (what gets
+   shown once a cell is revealed). Separate from Snake/2048 in that it
+   needs both mouse buttons (left reveal, right flag) rather than just
+   arrow keys. */
+#define MINE_COLS  9
+#define MINE_ROWS  9
+#define MINE_MINES 10
+#define MINE_CELL  16
+
+static int8_t mine_board[MINE_ROWS][MINE_COLS];
+static uint8_t mine_revealed[MINE_ROWS][MINE_COLS];
+static uint8_t mine_flagged[MINE_ROWS][MINE_COLS];
+static int mine_started = 0;
+static int mine_over = 0;   /* 0 = playing, 1 = lost, 2 = won */
+
+static void mine_reset(void) {
+    for (int r=0;r<MINE_ROWS;r++)
+        for (int c=0;c<MINE_COLS;c++) {
+            mine_board[r][c] = 0;
+            mine_revealed[r][c] = 0;
+            mine_flagged[r][c] = 0;
+        }
+    mine_over = 0;
+
+    int placed = 0;
+    while (placed < MINE_MINES) {
+        int r = (int)(gui_rand() % MINE_ROWS);
+        int c = (int)(gui_rand() % MINE_COLS);
+        if (mine_board[r][c] == -1) continue;
+        mine_board[r][c] = -1;
+        placed++;
+    }
+
+    for (int r=0;r<MINE_ROWS;r++)
+        for (int c=0;c<MINE_COLS;c++) {
+            if (mine_board[r][c] == -1) continue;
+            int n = 0;
+            for (int dr=-1;dr<=1;dr++)
+                for (int dc=-1;dc<=1;dc++) {
+                    if (!dr && !dc) continue;
+                    int rr=r+dr, cc=c+dc;
+                    if (rr<0||rr>=MINE_ROWS||cc<0||cc>=MINE_COLS) continue;
+                    if (mine_board[rr][cc] == -1) n++;
+                }
+            mine_board[r][c] = (int8_t)n;
+        }
 }
 
 static int  pkg_selected = -1;
