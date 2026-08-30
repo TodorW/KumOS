@@ -1698,6 +1698,17 @@ static void paint_clear(void) {
             paint_canvas[y][x] = C_WHITE;
 }
 
+/* paint_canvas is one contiguous PAINT_H*PAINT_W byte block (row-major,
+   same indexed-color encoding backbuf uses) - dumping/restoring it is
+   just a flat fat12_write/fat12_read, no per-pixel serialization needed. */
+static void paint_save(void) {
+    fat12_write("CANVAS.PNT", &paint_canvas[0][0], PAINT_H*PAINT_W);
+}
+
+static void paint_load(void) {
+    fat12_read("CANVAS.PNT", &paint_canvas[0][0], PAINT_H*PAINT_W);
+}
+
 /* A 3x3 dab instead of a single pixel - painting only plots wherever the
    mouse actually was each frame (no line interpolation between last
    frame's position and this one), so a bare single-pixel brush left
@@ -1731,6 +1742,8 @@ static void render_paint(winrec_t *w) {
         gui_rect(px, py, 16, 16, paint_color==paint_palette[i] ? C_WHITE : C_WIN_BORDER);
     }
     gui_button(cx0+8*20+8, py, 40, 16, "Clear", gui_pressed(cx0+8*20+8, py, 40, 16));
+    gui_button(cx0+8*20+52, py, 40, 16, "Save", gui_pressed(cx0+8*20+52, py, 40, 16));
+    gui_button(cx0+8*20+96, py, 40, 16, "Load", gui_pressed(cx0+8*20+96, py, 40, 16));
 }
 
 static void paint_handle_click(winrec_t *w, int mx, int my) {
@@ -1742,6 +1755,8 @@ static void paint_handle_click(winrec_t *w, int mx, int my) {
         if (point_in(mx, my, px, py, 16, 16)) { paint_color = paint_palette[i]; return; }
     }
     if (point_in(mx, my, cx0+8*20+8, py, 40, 16)) { paint_clear(); return; }
+    if (point_in(mx, my, cx0+8*20+52, py, 40, 16)) { paint_save(); return; }
+    if (point_in(mx, my, cx0+8*20+96, py, 40, 16)) { paint_load(); return; }
     if (point_in(mx, my, cx0, cy0, PAINT_W, PAINT_H)) {
         paint_dot(mx-cx0, my-cy0);
         g_painting = 1;
