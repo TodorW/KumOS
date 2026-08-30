@@ -627,7 +627,7 @@ typedef enum {
     WIN_PIANO=12, WIN_2048=13, WIN_MINE=14, WIN_COUNT=15
 } wintype_t;
 
-typedef struct { int active, x, y, w, h, minimized, min_w, min_h; } winrec_t;
+typedef struct { int active, x, y, w, h, minimized, min_w, min_h, maxed, rx, ry, rw, rh; } winrec_t;
 
 static winrec_t wins[WIN_COUNT];
 static int      zorder[WIN_COUNT];
@@ -708,6 +708,21 @@ static void wm_open(int t, int defx, int defy, int defw, int defh) {
 static void wm_close(int t) {
     wins[t].active = 0;
     wm_remove_z(t);
+}
+
+/* Double-click-the-titlebar maximize, toggling back to whatever geometry
+   the window had before - the rx/ry/rw/rh fields exist on winrec_t only
+   to remember that one prior state. */
+static void wm_toggle_maximize(int t) {
+    winrec_t *w = &wins[t];
+    if (w->maxed) {
+        w->x = w->rx; w->y = w->ry; w->w = w->rw; w->h = w->rh;
+        w->maxed = 0;
+    } else {
+        w->rx = w->x; w->ry = w->y; w->rw = w->w; w->rh = w->h;
+        w->x = 0; w->y = 10; w->w = GUI_WIDTH; w->h = GUI_HEIGHT-10;
+        w->maxed = 1;
+    }
 }
 
 static void wm_cascade(void) {
@@ -2398,6 +2413,7 @@ void gui_run(void) {
 
     int prev_left = 0, prev_right = 0;
     int dragging = -1, drag_ox = 0, drag_oy = 0;
+    int last_tb_win = -1; uint32_t last_tb_tick = 0;
     int resizing = -1, resize_ow = 0, resize_oh = 0, resize_mx = 0, resize_my = 0;
     int running = 1;
 
@@ -2579,8 +2595,12 @@ void gui_run(void) {
                         wm_close(hit);
                     } else if (mx>=w->x+w->w-22 && mx<w->x+w->w-13) {
                         w->minimized = 1;
+                    } else if (hit == last_tb_win && timer_ticks()-last_tb_tick < 40) {
+                        wm_toggle_maximize(hit);
+                        last_tb_win = -1;
                     } else {
                         dragging = hit; drag_ox = mx-w->x; drag_oy = my-w->y;
+                        last_tb_win = hit; last_tb_tick = timer_ticks();
                     }
                 } else if (mx>=w->x+w->w-8 && mx<w->x+w->w && my>=w->y+w->h-8 && my<w->y+w->h) {
                     resizing = hit; resize_ow = w->w; resize_oh = w->h;
