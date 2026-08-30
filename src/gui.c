@@ -509,6 +509,14 @@ static void icon_glyph(int x, int y, icon_kind_t kind) {
         gui_rect_fill(x,   y+8, 9, 6,  C_LIGHT_BLUE);
         gui_rect_fill(x+11,y+8, 9, 6,  C_LIGHT_GREEN);
         break;
+    case ICON_MINE:
+        gui_rect_fill(x, y+2, 20, 11, C_LIGHT_GREY);
+        gui_rect_fill(x+7, y+4, 6, 6, C_BLACK);
+        gui_rect_fill(x+2, y+5, 3, 3, C_BLACK);
+        gui_rect_fill(x+15, y+5, 3, 3, C_BLACK);
+        gui_pixel(x+9, y, C_BLACK);
+        gui_pixel(x+10, y+1, C_RED);
+        break;
     }
 }
 

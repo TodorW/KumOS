@@ -77,7 +77,7 @@ void gui_button(int x, int y, int w, int h, const char *label, int pressed);
 typedef enum {
     ICON_TERM, ICON_FOLDER, ICON_MONITOR, ICON_CALC,
     ICON_NOTE, ICON_EXIT, ICON_PKG, ICON_BROWSER, ICON_PAINT, ICON_SNAKE,
-    ICON_PIANO, ICON_2048
+    ICON_PIANO, ICON_2048, ICON_MINE
 } icon_kind_t;
 
 void gui_icon(int x, int y, const char *label, uint8_t icon_color, icon_kind_t kind);
