@@ -1343,7 +1343,7 @@ static void render_sysmon(winrec_t *w) {
     gui_printf(cx,cy, C_WHITE, C_BLACK, "Uptime: %ds", (int)timer_seconds()); cy += 9;
     gui_printf(cx,cy, C_WHITE, C_BLACK, "Heap: %uK/%uK", kmalloc_used()/1024, (kmalloc_used()+kmalloc_free())/1024); cy += 9;
     gui_printf(cx,cy, C_WHITE, C_BLACK, "Frames: %u/%u", pmm_used(), pmm_total()); cy += 9;
-    gui_printf(cx,cy, C_LIGHT_CYAN,C_BLACK, "Tasks: %d", sched_task_count()); cy += 9;
+    gui_printf(cx,cy, C_LIGHT_CYAN,C_BLACK, "Tasks: %d (click to kill)", sched_task_count()); cy += 9;
 
     if (net_ready()) {
         uint32_t ip = net_get_ip();
@@ -1363,6 +1363,31 @@ static void render_sysmon(winrec_t *w) {
         if (!t) continue;
         uint8_t fg = (i==cur) ? C_LIGHT_GREEN : C_LIGHT_GREY;
         gui_printf(cx,cy,fg,C_BLACK,"%d %s", t->pid, t->name);
+        cy += 9; shown++;
+    }
+}
+
+/* Recomputes exactly where render_sysmon() put each task row (same
+   header-line count, same net-status branch) so a click can be mapped
+   back to the task it landed on - kept in one place rather than a
+   second copy of the header layout, since only the click path needs to
+   know the row's full width for a hit test, not draw anything. Skips
+   pid 0 (idle/kernel) and the caller's own task (this GUI) - killing
+   either would take the whole desktop down with it. */
+static void sysmon_handle_click(winrec_t *w, int mx, int my) {
+    int cy = w->y + 14 + 9*5;
+    cy += net_ready() ? 9*2 : 9;
+
+    int maxrows = (w->y+w->h-9-cy) / 9;
+    int shown = 0;
+    int cur = sched_current_index();
+    for (int i=0;i<sched_task_count() && shown<maxrows;i++) {
+        task_t *t = sched_task_at(i);
+        if (!t) continue;
+        if (point_in(mx, my, w->x+1, cy-1, w->w-2, 9)) {
+            if (t->pid != 0 && i != cur) signal_send(t->pid, SIGTERM);
+            return;
+        }
         cy += 9; shown++;
     }
 }
@@ -2631,6 +2656,8 @@ void gui_run(void) {
                     resize_mx = mx; resize_my = my;
                 } else if (hit == WIN_FILES) {
                     files_handle_click(w, mx, my);
+                } else if (hit == WIN_SYSMON) {
+                    sysmon_handle_click(w, mx, my);
                 } else if (hit == WIN_CALC) {
                     calc_handle_click(w, mx, my);
                 } else if (hit == WIN_EDITOR) {
