@@ -577,6 +577,30 @@ static int gui_pressed(int x, int y, int w, int h) {
     return cur_mdown && point_in(cur_mx, cur_my, x, y, w, h);
 }
 
+/* Shared click-to-edit text field - the browser URL bar and KumWrite's
+   filename field both hand-rolled this same box+text+blink-cursor draw
+   and the same backspace/printable-append key handling before this
+   existed (see round 19's memory - noted as the natural next toolkit
+   step, never done until now). Enter/escape stay caller-side since what
+   they mean differs per field (navigate vs stop-editing). */
+static void gui_textfield_draw(int x, int y, int w, int h, const char *buf, int editing) {
+    gui_rect_fill(x, y, w, h, C_WHITE);
+    gui_rect(x, y, w, h, editing ? C_NAVY : C_LIGHT_GREY);
+    gui_puts(x+2, y+2, buf, C_BLACK, C_WHITE);
+    if (editing && (timer_ticks()/50) & 1)
+        gui_rect_fill(x+2+(int)kstrlen(buf)*8, y+1, 6, 9, C_LIGHT_GREY);
+}
+
+static void gui_textfield_key(char *buf, int maxlen, char key) {
+    if (key == '\b') {
+        int n = (int)kstrlen(buf);
+        if (n > 0) buf[n-1] = 0;
+    } else if (key >= 32 && (uint8_t)key < 127) {
+        int n = (int)kstrlen(buf);
+        if (n < maxlen-1) { buf[n] = key; buf[n+1] = 0; }
+    }
+}
+
 /* No general-purpose rand() anywhere in this kernel - tls.c has its own
    SHA256-backed CSPRNG but that's a crypto concern, wrong thing to couple
    a game's food/tile placement to. A bog-standard LCG seeded off
