@@ -2543,9 +2543,14 @@ void gui_run(void) {
                 else running = 0;
             } else if (key == '\t' && keyboard_alt_held()) {
                 wm_cycle_focus();
-            } else if (key == 's' && keyboard_ctrl_held() && top == WIN_EDITOR) {
+            } else if (key == 19 && top == WIN_EDITOR) {
+                /* keyboard.c already folds Ctrl+<letter> down to its
+                   control-code value (c -= 96) before this ever reaches
+                   the GUI - Ctrl+S arrives as 19 (0x13/DC3), never as a
+                   literal 's' with keyboard_ctrl_held() true, so that's
+                   what has to be matched here, not the letter. */
                 editor_save();
-            } else if (key == 's' && keyboard_ctrl_held() && top == WIN_WRITE) {
+            } else if (key == 19 && top == WIN_WRITE) {
                 write_save();
             } else if (top >= WIN_TERMINAL && top <= WIN_TERMINAL3) {
                 term_cur = top - WIN_TERMINAL;
