@@ -2219,11 +2219,7 @@ static void render_browser(winrec_t *w) {
     gui_window(w->x, w->y, w->w, w->h, "Browser");
 
     int cy = w->y + 12;
-    gui_rect_fill(w->x+3, cy, w->w-46, 12, C_WHITE);
-    gui_rect(w->x+3, cy, w->w-46, 12, browser_editing ? C_NAVY : C_LIGHT_GREY);
-    gui_puts(w->x+5, cy+2, browser_urlbar, C_BLACK, C_WHITE);
-    if (browser_editing && (timer_ticks()/50) & 1)
-        gui_rect_fill(w->x+5+(int)kstrlen(browser_urlbar)*8, cy+1, 6, 9, C_LIGHT_GREY);
+    gui_textfield_draw(w->x+3, cy, w->w-46, 12, browser_urlbar, browser_editing);
     gui_button(w->x+w->w-40, cy, 38, 12, "Go", gui_pressed(w->x+w->w-40, cy, 38, 12));
     cy += 14;
 
@@ -2497,15 +2493,8 @@ void gui_run(void) {
                 }
             } else if (top == WIN_BROWSER) {
                 if (browser_editing) {
-                    if (key == '\n') {
-                        browser_go();
-                    } else if (key == '\b') {
-                        int n = (int)kstrlen(browser_urlbar);
-                        if (n > 0) browser_urlbar[n-1] = 0;
-                    } else if (key >= 32 && (uint8_t)key < 127) {
-                        int n = (int)kstrlen(browser_urlbar);
-                        if (n < BROWSER_URL_MAX-1) { browser_urlbar[n] = key; browser_urlbar[n+1] = 0; }
-                    }
+                    if (key == '\n') browser_go();
+                    else gui_textfield_key(browser_urlbar, BROWSER_URL_MAX, key);
                 } else {
                     /* no scroll wheel on this OS's PS/2 mouse driver - up/
                        down arrows scroll a line, space a page, same as a
