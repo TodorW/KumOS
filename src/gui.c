@@ -2631,6 +2631,13 @@ void gui_run(void) {
                 editor_save();
             } else if (key == 19 && top == WIN_WRITE) {
                 write_save();
+            } else if (key == 14 && top == WIN_WRITE) {
+                /* Ctrl+N -> 14 (0x0E), same fold-to-control-code as
+                   Ctrl+S above. */
+                write_new();
+            } else if (key == 15 && top == WIN_WRITE) {
+                /* Ctrl+O -> 15 (0x0F, SI). */
+                write_open();
             } else if (top >= WIN_TERMINAL && top <= WIN_TERMINAL3) {
                 term_cur = top - WIN_TERMINAL;
                 if (key == '\n') {
