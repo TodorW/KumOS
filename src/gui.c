@@ -2598,6 +2598,12 @@ void gui_run(void) {
                 else if (!g2048_over && key == KEY_DOWN)  g2048_move(3);
             } else if (top == WIN_MINE) {
                 if (key=='r' || key=='R') mine_reset();
+            } else if (top == WIN_CALC) {
+                char kb[2] = { key, 0 };
+                if (key>='0' && key<='9') calc_press(kb);
+                else if (key=='+'||key=='-'||key=='*'||key=='/') calc_press(kb);
+                else if (key=='\n' || key=='=') calc_press("=");
+                else if (key=='c' || key=='C' || key=='\b') calc_press("C");
             }
         }
 
