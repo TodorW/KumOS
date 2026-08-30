@@ -403,8 +403,29 @@ void gui_window(int x, int y, int w, int h, const char *title) {
     gui_line(x+w-4, y+h-2, x+w-2, y+h-4, C_WIN_BORDER);
 }
 
+static int point_in(int px, int py, int x, int y, int w, int h) {
+    return px>=x && px<x+w && py>=y && py<y+h;
+}
+
+/* Set once per frame in gui_run() right before the windows are drawn -
+   every render_*() function can then ask gui_pressed()/gui_hover()
+   whether ITS OWN button is the one currently held down or just sitting
+   under the cursor, instead of every gui_button() call across every
+   window hardcoding "not pressed" (which is what all of them did before
+   this - the pressed/C_BUTTON visual state gui_button() already
+   supported was simply never wired up to anything real). */
+static int cur_mx = -1, cur_my = -1, cur_mdown = 0;
+
+static int gui_pressed(int x, int y, int w, int h) {
+    return cur_mdown && point_in(cur_mx, cur_my, x, y, w, h);
+}
+
+static int gui_hover(int x, int y, int w, int h) {
+    return point_in(cur_mx, cur_my, x, y, w, h);
+}
+
 void gui_button(int x, int y, int w, int h, const char *label, int pressed) {
-    uint8_t bg = pressed ? C_BUTTON : C_BUTTON_HI;
+    uint8_t bg = pressed ? C_BUTTON : (gui_hover(x, y, w, h) ? (uint8_t)(C_GRAD_ACCENT+2) : C_BUTTON_HI);
     gui_rect_fill(x, y, w, h, bg);
     gui_rect(x, y, w, h, C_WIN_BORDER);
     int tx = x + (w - (int)kstrlen(label)*8) / 2;
@@ -560,22 +581,6 @@ void gui_draw_cursor(int x, int y) {
         }
 }
 
-static int point_in(int px, int py, int x, int y, int w, int h) {
-    return px>=x && px<x+w && py>=y && py<y+h;
-}
-
-/* Set once per frame in gui_run() right before the windows are drawn -
-   every render_*() function can then ask gui_pressed() whether ITS OWN
-   button is the one currently being held down, instead of every
-   gui_button() call across every window hardcoding "not pressed" (which
-   is what all of them did before this - the pressed/C_BUTTON visual
-   state gui_button() already supported was simply never wired up to
-   anything real). */
-static int cur_mx = -1, cur_my = -1, cur_mdown = 0;
-
-static int gui_pressed(int x, int y, int w, int h) {
-    return cur_mdown && point_in(cur_mx, cur_my, x, y, w, h);
-}
 
 /* Shared click-to-edit text field - the browser URL bar and KumWrite's
    filename field both hand-rolled this same box+text+blink-cursor draw
