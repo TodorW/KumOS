@@ -499,7 +499,7 @@ uint32_t paging_clone_dir(void) {
            swapped out by an unrelated process). */
         if (i < 256 && i != 1 && i != 255) {
             new_dir[i] = page_dir[i];
-        } else {
+        } else if (i == 1 || i == 255) {
             uint32_t tbl_phys = page_dir[i] & ~0xFFF;
             uint32_t *src_tbl = (uint32_t *)tbl_phys;
             uint32_t new_tbl_phys = pmm_alloc();
@@ -517,6 +517,36 @@ uint32_t paging_clone_dir(void) {
             }
             new_dir[i] = new_tbl_phys | (page_dir[i] & 0xFFF);
         }
+        /* Anything else >= 256 (never PDE 1 or 255) is left absent in the
+           new directory entirely - neither aliased nor copied. In practice
+           the only thing that ever ends up there is gui.c's VBE linear
+           framebuffer mapping: set_vbe_mode() calls paging_map() while
+           task 0 (the GUI/kernel task, which always runs directly on this
+           same global page_dir - see sched.c's page_dir_phys==0 case) is
+           current, so the framebuffer's own PDE (index ~1012 for a typical
+           QEMU std-vga BAR) ends up sitting in THIS template even though
+           it has nothing to do with any user process. Before this fix, the
+           old blanket "i>=256 is always private, deep-copy it" rule swept
+           that PDE up too: every fork()/execve() anywhere in the OS, once
+           the GUI had started, silently deep-copied the live 3MB
+           framebuffer into a private throwaway mapping, and freed it again
+           on that process's own exit via paging_free_user() below. Found
+           while chasing the long-open, hard-to-reproduce "GUI corrupts
+           near the border" report (round 20/26) - `crond.elf &` then
+           `exit` to the GUI reliably paints RGB static over the desktop/
+           icon column within seconds of crond's self-exec (into
+           sysinfo.elf), and this PDE was genuinely being cloned/freed at
+           exactly that moment. But verified live with this fix alone in
+           place that it is NOT the report's actual cause: the same
+           corruption still reproduces with this path confirmed no longer
+           touching the framebuffer's PDE at all. It's a real, independent
+           correctness bug regardless (a user process has no legitimate
+           reason to inherit a mapping of the video driver's own device
+           memory, and copying 3MB of it on every fork/exec was pure
+           waste) - kept fixed on its own merits. Root cause of the visual
+           corruption is still open; see gui_is_active()'s comment in
+           gui.c for the other real-but-not-it bug found in the same
+           investigation. */
     }
     return new_dir_phys;
 }
@@ -524,7 +554,15 @@ uint32_t paging_clone_dir(void) {
 void paging_free_user(uint32_t dir_phys) {
     uint32_t *dir = (uint32_t *)dir_phys;
     for (int i = 0; i < PAGE_ENTRIES; i++) {
-        if (i != 1 && i != 255 && i < 256) continue; /* only PDE 1, PDE 255 (user stack) + i>=256 are ever privately owned, see paging_clone_dir */
+        /* Only PDE 1 (user code) and PDE 255 (user stack) are ever privately
+           owned by a process directory now - see paging_clone_dir(), which
+           no longer gives new directories a private copy of anything else
+           >= 256 (that used to sweep up the GUI's own framebuffer PDE).
+           Skipping everything else here isn't just tidiness: this dir[i]
+           could in principle still carry a raw alias into shared/device
+           memory from elsewhere, and blindly pmm_free()-ing whatever it
+           points at would be freeing memory this directory never owned. */
+        if (i != 1 && i != 255) continue;
         if (!dir[i]) continue;
         uint32_t tbl_phys = dir[i] & ~0xFFF;
         uint32_t *tbl = (uint32_t *)tbl_phys;
