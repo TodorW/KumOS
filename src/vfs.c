@@ -7,6 +7,7 @@
 #include "vga.h"
 #include "kstring.h"
 #include "sched.h"
+#include "gui.h"
 #include <stdint.h>
 
 static vfs_fd_t fd_table[VFS_MAX_FD];
@@ -243,8 +244,22 @@ void vfs_set_stdout_sink(vfs_stdout_sink_t sink) { stdout_sink = sink; }
 static int dev_vfs_write(int d, const void *buf, uint32_t len) {
     if (d == 1 || d == 2) {
         const char *s = (const char *)buf;
-        if (stdout_sink) { for (uint32_t i = 0; i < len; i++) stdout_sink(s[i]); }
-        else             { for (uint32_t i = 0; i < len; i++) vga_putchar(s[i]); }
+        /* A process with no stdout_sink wired (anything not launched via
+           the GUI's own Run button - e.g. a background daemon started
+           from the pre-GUI kush shell that goes on printing after the GUI
+           takes over) used to fall through to vga_putchar() unconditionally.
+           That's fine in real text mode, but gui.c's VBE/LFB mode reuses
+           the exact same physical VRAM as the legacy 0xB8000 window (see
+           vga_font_snapshot()'s comment), so those writes land inside the
+           live, currently-displayed framebuffer instead of a buffer nobody
+           is showing - confirmed live as the source of a long-open "GUI
+           corrupts near the border" report (`crond.elf &` then `exit` to
+           the GUI reliably painted RGB static over the desktop/icon column
+           within seconds). With no sink and the GUI up, there's nowhere
+           legitimate for this output to go - drop it instead of scribbling
+           into video memory. */
+        if (stdout_sink)          { for (uint32_t i = 0; i < len; i++) stdout_sink(s[i]); }
+        else if (!gui_is_active()) { for (uint32_t i = 0; i < len; i++) vga_putchar(s[i]); }
         return (int)len;
     }
     if (d == 3) return (int)len;

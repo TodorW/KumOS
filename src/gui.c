@@ -106,6 +106,28 @@ static uint32_t find_vbe_fb_phys(void) {
     return 0;
 }
 
+/* True for the entire span between gui_init() and gui_exit() - lets other
+   subsystems (vfs.c's console fallback, see below) tell VBE/LFB mode apart
+   from the legacy text console. Needed because a process with no GUI
+   stdout_sink (anything not launched via the GUI's own Run button - a
+   background daemon like crond started from the pre-GUI kush shell is the
+   real-world case that found this) still falls back to vga_putchar() for
+   fd 1/2, which writes straight to 0xB8000. That's harmless in real text
+   mode, but VBE/LFB reuses the exact same physical VRAM (see the font-plane
+   comment on vga_font_snapshot()) - so those writes land somewhere inside
+   the live, currently-displayed framebuffer instead of a legacy buffer
+   nobody's showing. Found while chasing the long-open "GUI corrupts near
+   the border" report (round 20/26): a real bug, and worth closing on its
+   own merits, but verified with this fix alone in place that it is NOT
+   the report's actual cause - `crond.elf &` then `exit` to the GUI still
+   reproduces the same RGB-static corruption with this path fully gated
+   off. See the paging_clone_dir() comment for the other real bug found
+   and fixed in the same investigation, which *also* didn't turn out to be
+   the cause. Root cause is still open - both fixes are kept regardless,
+   since each is independently a genuine correctness issue. */
+static int gui_active = 0;
+int gui_is_active(void) { return gui_active; }
+
 static uint32_t fb_phys_addr = 0;
 static uint32_t fb_pitch     = 0;
 static uint8_t *fb_ptr       = 0;
@@ -2596,6 +2618,7 @@ static int ctxmenu_hit(int mx, int my) {
 
 void gui_run(void) {
     gui_init();
+    gui_active = 1;
     for (int i=0;i<MAX_TERMS;i++) term_init(i);
     editor_init_buf();
 
@@ -2941,5 +2964,6 @@ void gui_run(void) {
         __asm__ volatile("hlt");
     }
 
+    gui_active = 0;
     gui_exit();
 }

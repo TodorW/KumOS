@@ -58,6 +58,7 @@
 
 void gui_init(void);
 void gui_exit(void);
+int  gui_is_active(void);
 
 void gui_pixel(int x, int y, uint8_t c);
 void gui_clear(uint8_t color);
