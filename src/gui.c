@@ -1286,12 +1286,41 @@ static int  files_count = 0;
 static int  files_selected = -1;
 static int  files_preview = 0;
 static char files_previewbuf[256];
+static int  files_renaming = 0;
+static char files_renamebuf[13];
 
 static void files_refresh(void) {
     files_count = fat12_mounted() ? fat12_list(files_entries, FILES_MAX) : 0;
     if (files_count < 0) files_count = 0;
     files_selected = -1;
     files_preview = 0;
+    files_renaming = 0;
+}
+
+/* Rename-via-copy: there's no fat12_rename() (a FAT12 directory-entry-only
+   rename would be a smaller/faster op, but this OS's fat12.c never grew
+   one) - read the file's current bytes out, write them under the new
+   name, then delete the old entry. Reuses the same three primitives Del/
+   the terminal's own file commands already lean on, so no new on-disk
+   format code. 8KB covers every file this OS actually creates (docs,
+   saved canvases, package blobs are all well under that); anything larger
+   silently truncates on rename, same ceiling files_previewbuf already
+   imposes on viewing a file in this app. */
+static uint8_t files_renamebuf_data[8192];
+
+static void files_do_rename(void) {
+    if (files_selected < 0 || !files_renamebuf[0]) { files_renaming = 0; return; }
+    if (kstrcmp(files_renamebuf, files_entries[files_selected].name) == 0) {
+        files_renaming = 0;
+        return;
+    }
+    int n = fat12_read(files_entries[files_selected].name, files_renamebuf_data,
+                        sizeof(files_renamebuf_data));
+    if (n < 0) n = 0;
+    fat12_write(files_renamebuf, files_renamebuf_data, (uint32_t)n);
+    fat12_delete(files_entries[files_selected].name);
+    files_renaming = 0;
+    files_refresh();
 }
 
 static void render_files(winrec_t *w) {
@@ -1325,12 +1354,25 @@ static void render_files(winrec_t *w) {
         gui_button(w->x+w->w-40, w->y+w->h-10, 38, 9, "Refr",
                    gui_pressed(w->x+w->w-40, w->y+w->h-10, 38, 9));
     } else {
-        gui_printf(cx, cy, C_YELLOW, C_BLACK, "%s", files_entries[files_selected].name);
-        gui_puts(cx, cy+10, files_previewbuf, C_LIGHT_GREEN, C_BLACK);
-        gui_button(w->x+w->w-78, w->y+w->h-14, 34, 11, "Del",
-                   gui_pressed(w->x+w->w-78, w->y+w->h-14, 34, 11));
-        gui_button(w->x+w->w-40, w->y+w->h-14, 34, 11, "Back",
-                   gui_pressed(w->x+w->w-40, w->y+w->h-14, 34, 11));
+        if (files_renaming) {
+            gui_textfield_draw(cx, cy, 100, 12, files_renamebuf, 1);
+        } else {
+            gui_printf(cx, cy, C_YELLOW, C_BLACK, "%s", files_entries[files_selected].name);
+        }
+        gui_puts(cx, cy+14, files_previewbuf, C_LIGHT_GREEN, C_BLACK);
+        if (files_renaming) {
+            gui_button(w->x+w->w-78, w->y+w->h-14, 34, 11, "OK",
+                       gui_pressed(w->x+w->w-78, w->y+w->h-14, 34, 11));
+            gui_button(w->x+w->w-40, w->y+w->h-14, 34, 11, "Cxl",
+                       gui_pressed(w->x+w->w-40, w->y+w->h-14, 34, 11));
+        } else {
+            gui_button(w->x+w->w-116, w->y+w->h-14, 34, 11, "Ren",
+                       gui_pressed(w->x+w->w-116, w->y+w->h-14, 34, 11));
+            gui_button(w->x+w->w-78, w->y+w->h-14, 34, 11, "Del",
+                       gui_pressed(w->x+w->w-78, w->y+w->h-14, 34, 11));
+            gui_button(w->x+w->w-40, w->y+w->h-14, 34, 11, "Back",
+                       gui_pressed(w->x+w->w-40, w->y+w->h-14, 34, 11));
+        }
     }
 }
 
@@ -1352,8 +1394,17 @@ static void files_handle_click(winrec_t *w, int mx, int my) {
                 return;
             }
         }
-    } else {
+    } else if (files_renaming) {
         if (point_in(mx, my, w->x+w->w-78, w->y+w->h-14, 34, 11)) {
+            files_do_rename();
+        } else if (point_in(mx, my, w->x+w->w-40, w->y+w->h-14, 34, 11)) {
+            files_renaming = 0;
+        }
+    } else {
+        if (point_in(mx, my, w->x+w->w-116, w->y+w->h-14, 34, 11)) {
+            kstrcpy(files_renamebuf, files_entries[files_selected].name);
+            files_renaming = 1;
+        } else if (point_in(mx, my, w->x+w->w-78, w->y+w->h-14, 34, 11)) {
             fat12_delete(files_entries[files_selected].name);
             files_refresh();
         } else if (point_in(mx, my, w->x+w->w-40, w->y+w->h-14, 34, 11)) {
@@ -2746,6 +2797,9 @@ void gui_run(void) {
                     else if (key == KEY_DOWN) browser_scroll++;
                     else if (key == ' ') browser_scroll += 15;
                 }
+            } else if (top == WIN_FILES && files_renaming) {
+                if (key == '\n') files_do_rename();
+                else gui_textfield_key(files_renamebuf, sizeof(files_renamebuf), key);
             } else if (top == WIN_WRITE) {
                 if (write_editing_name) {
                     if (key == '\n') write_editing_name = 0;
