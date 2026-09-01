@@ -127,12 +127,12 @@ static void name_to_83(const char *name, char out[11]) {
     }
 }
 
-static void name_from_83(const char raw[11], char *out) {
+static void name_from_83(const char name[8], const char ext[3], char *out) {
     int i = 0, j = 0;
-    while (i < 8 && raw[i] != ' ') out[j++] = raw[i++];
-    if (raw[8] != ' ') {
+    while (i < 8 && name[i] != ' ') out[j++] = name[i++];
+    if (ext[0] != ' ') {
         out[j++] = '.';
-        for (i = 8; i < 11 && raw[i] != ' '; i++) out[j++] = raw[i];
+        for (i = 0; i < 3 && ext[i] != ' '; i++) out[j++] = ext[i];
     }
     out[j] = 0;
 }
@@ -189,7 +189,7 @@ int fat12_list(fat12_entry_t *entries, int max) {
             if (dir->attr & (ATTR_VOLUME | ATTR_SYSTEM)) continue;
             if (dir->attr & ATTR_HIDDEN) continue;
             (void)de;
-            name_from_83(dir->name, entries[count].name);
+            name_from_83(dir->name, dir->ext, entries[count].name);
             entries[count].size          = dir->file_size;
             entries[count].start_cluster = dir->start_cluster;
             entries[count].attr          = dir->attr;
