@@ -41,25 +41,51 @@ void pmm_init(uint32_t mem_kb) {
     }
 }
 
+/* pmm_refs[] is read-modify-written from every task's context (vmalloc,
+   paging_clone_dir, demand paging, ...) with the scheduler free to preempt
+   between the read and the write on any timer tick - two tasks landing in
+   that gap for the same frame could both see it free and both claim it.
+   A real, independent correctness gap regardless of what triggers it, so
+   fixed here on its own merits. Tested against the long-open "GUI corrupts
+   near the border" report (round 20/26/27) while chasing it this round:
+   this alone does NOT stop that corruption (confirmed live, fix in place,
+   reproduced again) - see paging_clone_dir()'s comment below for the
+   actual mechanism found instead. */
+static inline uint32_t irq_save_cli(void) {
+    uint32_t flags;
+    __asm__ volatile ("pushfl; pop %0; cli" : "=r"(flags) :: "memory");
+    return flags;
+}
+static inline void irq_restore(uint32_t flags) {
+    __asm__ volatile ("push %0; popfl" :: "r"(flags) : "memory");
+}
+
 uint32_t pmm_alloc(void) {
+    uint32_t flags = irq_save_cli();
+    uint32_t result = 0;
     for (uint32_t i = pmm_base_frame; i < pmm_base_frame + pmm_total_frames; i++) {
         if (i >= PMM_MAX_FRAMES) break;
         if (pmm_refs[i] == 0) {
             pmm_refs[i] = 1;
             pmm_used_frames++;
-            return i * PAGE_SIZE;
+            result = i * PAGE_SIZE;
+            break;
         }
     }
-    return 0;
+    irq_restore(flags);
+    return result;
 }
 
 void pmm_free(uint32_t addr) {
     uint32_t idx = frame_idx(addr);
     if (idx >= PMM_MAX_FRAMES) return;
-    if (pmm_refs[idx] == 0) return;
-    pmm_refs[idx]--;
-    if (pmm_refs[idx] == 0 && pmm_used_frames)
-        pmm_used_frames--;
+    uint32_t flags = irq_save_cli();
+    if (pmm_refs[idx] != 0) {
+        pmm_refs[idx]--;
+        if (pmm_refs[idx] == 0 && pmm_used_frames)
+            pmm_used_frames--;
+    }
+    irq_restore(flags);
 }
 
 void pmm_ref(uint32_t addr) {
@@ -500,6 +526,42 @@ uint32_t paging_clone_dir(void) {
         if (i < 256 && i != 1 && i != 255) {
             new_dir[i] = page_dir[i];
         } else if (i == 1 || i == 255) {
+            /* This deep-copies whatever page_dir[1]/[255] (the GLOBAL
+               template - shared by kush and the GUI, both of which run
+               with page_dir_phys==0) currently has mapped, which a freshly
+               fork()'d child genuinely needs: it briefly resumes at the
+               PARENT's own EIP (sc_fork() built its initial stack from the
+               parent's own captured registers) before it gets around to
+               calling execve() itself, so its PDE1 has to have the
+               parent's real code present - tried making this table start
+               empty instead (removing the deep-copy entirely) and it
+               reliably page-faulted the instant a forked child tried to
+               resume, confirming this.
+
+               Root cause of the long-open "GUI corrupts near the border"
+               report (round 20/26/27), finally found this round via a
+               hardware watchpoint: page_dir[1] never shrinks.
+               elf_load_mem() (src/elf.c) only ever ADDS/reuses mappings
+               for a new image, it never unmaps what a PREVIOUS image left
+               there, so page_dir[1] keeps every page anything has EVER
+               loaded there since boot (kush's own code included, since
+               kush also runs on this same global directory) - by the time
+               anything forks, this loop isn't cloning "one process's few
+               pages", it's cloning everything, and the sheer number of
+               pmm_alloc() calls that takes made a collision with an
+               unrelated vmalloc() allocation (confirmed live: gui.c's
+               desktop_cache) a near-certainty. NOT fixed this round: the
+               obvious fix (have elf_load_mem() unmap+pmm_free the
+               previous image's pages before mapping the new one) is
+               unsafe as-is because kush's own initial load runs on this
+               same global directory and reuses physical frames straight
+               out of the boot-time full-RAM identity map (see
+               paging_init()) for its own code - freeing "unused" PDE1
+               entries can't tell that apart from genuine kernel memory
+               without first teaching elf_load_mem() to track which pages
+               it actually owns per load. Left as a real, understood,
+               reproducible bug for whoever picks this up next rather than
+               risk shipping a fix that frees live kernel memory. */
             uint32_t tbl_phys = page_dir[i] & ~0xFFF;
             uint32_t *src_tbl = (uint32_t *)tbl_phys;
             uint32_t new_tbl_phys = pmm_alloc();
