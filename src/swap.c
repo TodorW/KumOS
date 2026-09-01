@@ -5,8 +5,6 @@
 #include "serial.h"
 #include <stdint.h>
 
-#define PAGE_SIZE 4096
-
 typedef struct {
     uint32_t virt_addr;
     uint32_t slot;
