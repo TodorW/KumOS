@@ -68,9 +68,9 @@ void net_poll(void);
 void net_print_info(void);
 void net_get_stats(uint32_t *tx_packets, uint32_t *rx_packets);
 
-#define NET_IP(a,b,c,d)  ((uint32_t)((a)<<24|(b)<<16|(c)<<8|(d)))
+#define NET_IP(a,b,c,d)  (((uint32_t)(a)<<24)|((uint32_t)(b)<<16)|((uint32_t)(c)<<8)|(uint32_t)(d))
 #define NET_HTONS(x)     ((uint16_t)(((x)>>8)|((x)<<8)))
-#define NET_HTONL(x)     (((x)>>24)|(((x)>>8)&0xFF00)|(((x)<<8)&0xFF0000)|((x)<<24))
+#define NET_HTONL(x)     ((uint32_t)(((uint32_t)(x)>>24)|(((uint32_t)(x)>>8)&0xFF00)|(((uint32_t)(x)<<8)&0xFF0000)|((uint32_t)(x)<<24)))
 
 #endif
 
