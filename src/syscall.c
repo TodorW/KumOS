@@ -287,6 +287,14 @@ static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_
     uint32_t user_stack_top = 0x40000000;
     uint32_t user_esp       = user_stack_top - 4;
 
+    /* PDE255 (this stack range) was deep-copied by paging_clone_dir() same
+       as PDE1 - reclaim it for the same reason, plus it closes a related
+       latent bug: the "already mapped, leave it" check below used to
+       quietly reuse the PARENT's copied-over stack pages as-is (still
+       containing the parent's stack contents) instead of the fresh zeroed
+       page a new process's stack should start with. */
+    paging_unmap_range(user_stack_top - 16384, user_stack_top);
+
     for (uint32_t va = user_stack_top - 16384; va < user_stack_top; va += PAGE_SIZE) {
         if (!paging_is_mapped(va)) {
             uint32_t phys = pmm_alloc();
