@@ -1609,6 +1609,26 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
        GUI is also exited - each stage is just the next fallback. */
     elf_load_result_t boot_r = elf_load_disk("KUSH.ELF");
     if (boot_r.error == 0) {
+        /* kush runs on the GLOBAL directory (page_dir_phys==0, same as
+           the GUI) - its PDE1 table IS the boot-time full-RAM identity
+           map (paging_init()), not something private to kush. Every
+           physical frame in that range can be handed out by pmm_alloc()
+           to ANY kernel subsystem for ANY purpose, and the codebase-wide
+           convention of treating pmm_alloc()'s return value as a directly
+           dereferenceable identity-mapped pointer depends on that mapping
+           NEVER going away - unlike a forked child's own cloned PDE1
+           (a private copy of fresh pmm_alloc'd frames, see
+           paging_clone_dir()), so it can never be safely unmapped or
+           reset the way sc_execve() resets a child's own copy. Tried
+           exactly that as this bug's fix and it crashed the instant
+           elf_load_mem() next pmm_alloc'd one of the "reclaimed" frames
+           for something else and zeroed it via its own identity address -
+           confirmed live with a hardware breakpoint (kmemset() writing to
+           the exact address just unmapped). Record kush's real load
+           extent instead so paging_clone_dir() can bound its clone to
+           just that, without ever touching a single mapping here. */
+        paging_set_pde1_clone_bound(boot_r.load_base, boot_r.load_end);
+
         int boot_pid = elf_spawn("kush", &boot_r);
         if (boot_pid >= 0) {
             sched_waitpid(boot_pid);
