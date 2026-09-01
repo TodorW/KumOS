@@ -16,16 +16,6 @@ static char     cwd[VFS_MAX_PATH] = "/disk";
 static vfs_mount_t mounts[VFS_MAX_MOUNTS];
 static int         num_mounts = 0;
 
-static const char *strip_prefix(const char *path, const char *prefix) {
-    int plen = (int)kstrlen(prefix);
-    if (kstrncmp(path, prefix, (uint32_t)plen) == 0) {
-        const char *rest = path + plen;
-        if (*rest == '/') rest++;
-        return rest;
-    }
-    return 0;
-}
-
 static int find_mount(const char *path, const char **local) {
 
     int best = -1, best_len = 0;

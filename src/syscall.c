@@ -104,101 +104,6 @@ static uint32_t sc_putchar(uint32_t ch, uint32_t b, uint32_t c) {
     return 0;
 }
 
-#define MAX_USER_FD  8
-static struct { char name[32]; int open; uint32_t pos; } ufd[MAX_USER_FD];
-
-static uint32_t sc_open(uint32_t name_addr, uint32_t b, uint32_t c) {
-    (void)b; (void)c;
-    if (!name_addr) return (uint32_t)-1;
-    const char *name = (const char *)name_addr;
-
-    for (int i = 0; i < MAX_USER_FD; i++) {
-        if (!ufd[i].open) {
-
-            fs_file_t *mf = fs_find(name);
-            if (!mf && !fat12_mounted()) return (uint32_t)-1;
-            kstrcpy(ufd[i].name, name);
-            ufd[i].open = 1;
-            ufd[i].pos  = 0;
-            return (uint32_t)i;
-        }
-    }
-    return (uint32_t)-1;
-}
-
-static uint32_t sc_close(uint32_t fd, uint32_t b, uint32_t c) {
-    (void)b; (void)c;
-    if (fd >= MAX_USER_FD) return (uint32_t)-1;
-    ufd[fd].open = 0;
-    return 0;
-}
-
-static uint32_t sc_fread(uint32_t fd, uint32_t buf_addr, uint32_t sz) {
-    if (fd >= MAX_USER_FD || !ufd[fd].open) return (uint32_t)-1;
-    if (!buf_addr || sz == 0) return 0;
-    char *buf = (char *)buf_addr;
-
-    fs_file_t *mf = fs_find(ufd[fd].name);
-    if (mf) {
-        uint32_t avail = mf->size - ufd[fd].pos;
-        if (sz > avail) sz = avail;
-        kmemcpy(buf, mf->data + ufd[fd].pos, sz);
-        ufd[fd].pos += sz;
-        return sz;
-    }
-
-    if (fat12_mounted()) {
-        static uint8_t tbuf[4096];
-        int n = fat12_read(ufd[fd].name, tbuf, sizeof(tbuf));
-        if (n < 0) return (uint32_t)-1;
-        uint32_t avail = (uint32_t)n - ufd[fd].pos;
-        if (sz > avail) sz = avail;
-        kmemcpy(buf, tbuf + ufd[fd].pos, sz);
-        ufd[fd].pos += sz;
-        return sz;
-    }
-    return (uint32_t)-1;
-}
-
-static uint32_t sc_fwrite(uint32_t fd, uint32_t buf_addr, uint32_t sz) {
-    if (fd >= MAX_USER_FD || !ufd[fd].open) return (uint32_t)-1;
-    if (!buf_addr || sz == 0) return 0;
-    const char *buf = (const char *)buf_addr;
-
-    fs_file_t *mf = fs_find(ufd[fd].name);
-    if (mf) {
-        fs_write(ufd[fd].name, buf);
-        return sz;
-    }
-
-    if (fat12_mounted()) {
-        return fat12_write(ufd[fd].name, buf, sz) == 0 ? sz : (uint32_t)-1;
-    }
-    return (uint32_t)-1;
-}
-
-static uint32_t sc_listdir(uint32_t buf_addr, uint32_t sz, uint32_t c) {
-    (void)c;
-    if (!buf_addr || sz < 64) return 0;
-    char *buf = (char *)buf_addr;
-    uint32_t pos = 0;
-
-    fat12_entry_t entries[32];
-    int n = fs_file_count();
-    (void)n;
-
-    if (fat12_mounted()) {
-        int dc = fat12_list(entries, 32);
-        for (int i = 0; i < dc && pos + 16 < sz; i++) {
-            kstrcpy(buf + pos, entries[i].name);
-            pos += kstrlen(entries[i].name);
-            buf[pos++] = '\n';
-        }
-    }
-    buf[pos] = 0;
-    return pos;
-}
-
 static uint32_t sc_waitpid(uint32_t pid, uint32_t b, uint32_t c) {
     (void)b; (void)c;
     return (uint32_t)sched_waitpid((int)pid);
@@ -575,7 +480,5 @@ uint32_t syscall_dispatch(syscall_regs_t *regs) {
 }
 
 void syscall_init(void) {
-    kmemset(ufd, 0, sizeof(ufd));
-
     idt_set_raw(0x80, (uint32_t)isr128, 0x08, 0xEE);
 }

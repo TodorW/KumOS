@@ -29,8 +29,6 @@ static uint32_t offered_ip  = 0;
 static uint32_t offered_gw  = 0;
 static uint32_t offered_dns = 0;
 
-static uint8_t broadcast_mac[6] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
-
 static void build_discover(dhcp_pkt_t *p, uint32_t xid, uint8_t mac[6]) {
     kmemset(p, 0, sizeof(dhcp_pkt_t));
     p->op    = 1;

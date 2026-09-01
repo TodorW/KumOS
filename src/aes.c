@@ -30,10 +30,6 @@ static void build_inv_sbox(void) {
     tables_ready = 1;
 }
 
-static uint8_t xtime(uint8_t x) {
-    return (uint8_t)((x << 1) ^ ((x & 0x80) ? 0x1b : 0x00));
-}
-
 static uint8_t gmul(uint8_t a, uint8_t b) {
     uint8_t p = 0;
     for (int i = 0; i < 8; i++) {

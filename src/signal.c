@@ -1,6 +1,5 @@
 #include "signal.h"
 #include "sched.h"
-#include "vga.h"
 #include "kstring.h"
 #include <stdint.h>
 
@@ -8,14 +7,6 @@ static sigset_t proc_signals[SCHED_MAX_TASKS];
 
 void signal_init(void) {
     kmemset(proc_signals, 0, sizeof(proc_signals));
-}
-
-static int pid_to_idx(int pid) {
-    for (int i = 0; i < SCHED_MAX_TASKS; i++) {
-        task_t *t = sched_get_task(pid);
-        if (t && t->pid == pid) return i;
-    }
-    return -1;
 }
 
 int signal_send(int pid, int sig) {
