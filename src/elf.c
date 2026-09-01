@@ -12,8 +12,6 @@
 
 #define USER_CS  0x1B
 #define USER_DS  0x23
-#define ELF_USER_STACK_SIZE  16384
-#define ELF_USER_STACK_TOP   0x40000000
 
 int elf_validate(const elf32_hdr_t *hdr) {
     if (hdr->magic   != ELF_MAGIC) return -1;

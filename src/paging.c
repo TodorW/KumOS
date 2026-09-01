@@ -60,11 +60,34 @@ static inline void irq_restore(uint32_t flags) {
     __asm__ volatile ("push %0; popfl" :: "r"(flags) : "memory");
 }
 
+/* Never hands out a frame inside PDE1's own physical range
+   [0x400000, 0x800000). Every OTHER low PDE (0, 2-31ish, covering the
+   rest of physical RAM) is always aliased identically into every
+   process's page directory (see paging_clone_dir()), so a frame from
+   anywhere else is guaranteed identity-accessible no matter which
+   directory happens to be current - the codebase-wide convention of
+   treating pmm_alloc()'s return value as a directly-dereferenceable
+   pointer depends on exactly that. PDE1 is the one exception: it's
+   deep-copied and bounded per-process (paging_set_pde1_clone_bound()), so
+   a frame from inside it is only identity-accessible from whichever
+   specific directory's bound happens to cover it - and plenty of code
+   (paging_clone_dir()'s own bookkeeping, elf_load_mem()'s segment
+   loading, every ring-3 stack setup) does pmm_alloc() then an immediate
+   kmemset()/kmemcpy() straight through the returned physical address,
+   with no guarantee the CURRENTLY active directory's PDE1 bound covers
+   whatever pmm_alloc() just handed back. Found the hard way, three
+   separate times, each confirmed live with a hardware breakpoint on the
+   exact page fault: excluding this one narrow, otherwise-unneeded range
+   (about 3% of a typical 127MB machine) from the general allocator
+   entirely closes the whole class of bug in one place, instead of
+   auditing every pmm_alloc()-then-kmemset() call site in the codebase. */
 uint32_t pmm_alloc(void) {
+    uint32_t pde1_lo = frame_idx(0x00400000), pde1_hi = frame_idx(0x00800000);
     uint32_t flags = irq_save_cli();
     uint32_t result = 0;
     for (uint32_t i = pmm_base_frame; i < pmm_base_frame + pmm_total_frames; i++) {
         if (i >= PMM_MAX_FRAMES) break;
+        if (i >= pde1_lo && i < pde1_hi) continue;
         if (pmm_refs[i] == 0) {
             pmm_refs[i] = 1;
             pmm_used_frames++;
@@ -79,6 +102,13 @@ uint32_t pmm_alloc(void) {
 void pmm_free(uint32_t addr) {
     uint32_t idx = frame_idx(addr);
     if (idx >= PMM_MAX_FRAMES) return;
+    /* Never let a bug (this round's fork/exec paging fix included) free a
+       frame the kernel's own image/heap is still sitting on - see
+       KERNEL_RESERVED_END's comment in paging.h. This alone doesn't stop
+       a caller from unmapping the PTE that points at one (paging_unmap()
+       calls this after clearing the PTE either way), just from the
+       physical frame being handed back out to someone else afterward. */
+    if (idx < frame_idx(KERNEL_RESERVED_END)) return;
     uint32_t flags = irq_save_cli();
     if (pmm_refs[idx] != 0) {
         pmm_refs[idx]--;
@@ -167,6 +197,10 @@ void paging_unmap(uint32_t virt) {
     pmm_free(*pte & ~0xFFF);
     *pte = 0;
     tlb_flush_page(virt);
+}
+
+void paging_unmap_range(uint32_t start, uint32_t end) {
+    for (uint32_t va = start; va < end; va += PAGE_SIZE) paging_unmap(va);
 }
 
 uint32_t paging_virt_to_phys(uint32_t virt) {
@@ -486,6 +520,20 @@ uint32_t paging_root_dir(void) {
     return (uint32_t)page_dir;
 }
 
+/* See paging_clone_dir()'s comment. Defaults to the full PDE1 range
+   (unbounded, matching the pre-round-28 behavior) until
+   paging_set_pde1_clone_bound() narrows it. */
+static uint32_t pde1_clone_start = 0x00400000;
+static uint32_t pde1_clone_end   = 0x00800000;
+
+void paging_set_pde1_clone_bound(uint32_t start, uint32_t end) {
+    if (start < 0x00400000) start = 0x00400000;
+    if (end   > 0x00800000) end   = 0x00800000;
+    if (start >= end) return;
+    pde1_clone_start = start;
+    pde1_clone_end   = end;
+}
+
 uint32_t paging_clone_dir(void) {
     uint32_t new_dir_phys = pmm_alloc();
     if (!new_dir_phys) return 0;
@@ -526,49 +574,86 @@ uint32_t paging_clone_dir(void) {
         if (i < 256 && i != 1 && i != 255) {
             new_dir[i] = page_dir[i];
         } else if (i == 1 || i == 255) {
-            /* This deep-copies whatever page_dir[1]/[255] (the GLOBAL
-               template - shared by kush and the GUI, both of which run
-               with page_dir_phys==0) currently has mapped, which a freshly
-               fork()'d child genuinely needs: it briefly resumes at the
-               PARENT's own EIP (sc_fork() built its initial stack from the
-               parent's own captured registers) before it gets around to
-               calling execve() itself, so its PDE1 has to have the
-               parent's real code present - tried making this table start
-               empty instead (removing the deep-copy entirely) and it
-               reliably page-faulted the instant a forked child tried to
-               resume, confirming this.
+            /* This deep-copies page_dir[1]/[255] (the GLOBAL template -
+               shared by kush and the GUI, both of which run with
+               page_dir_phys==0), which a freshly fork()'d child genuinely
+               needs: it briefly resumes at the PARENT's own EIP (sc_fork()
+               built its initial stack from the parent's own captured
+               registers) before it gets around to calling execve() itself,
+               so its PDE1 has to have the parent's real code present -
+               tried making this table start empty instead and it reliably
+               page-faulted the instant a forked child tried to resume,
+               confirming this.
 
                Root cause of the long-open "GUI corrupts near the border"
-               report (round 20/26/27), finally found this round via a
-               hardware watchpoint: page_dir[1] never shrinks.
-               elf_load_mem() (src/elf.c) only ever ADDS/reuses mappings
-               for a new image, it never unmaps what a PREVIOUS image left
-               there, so page_dir[1] keeps every page anything has EVER
-               loaded there since boot (kush's own code included, since
-               kush also runs on this same global directory) - by the time
-               anything forks, this loop isn't cloning "one process's few
-               pages", it's cloning everything, and the sheer number of
-               pmm_alloc() calls that takes made a collision with an
-               unrelated vmalloc() allocation (confirmed live: gui.c's
-               desktop_cache) a near-certainty. NOT fixed this round: the
-               obvious fix (have elf_load_mem() unmap+pmm_free the
-               previous image's pages before mapping the new one) is
-               unsafe as-is because kush's own initial load runs on this
-               same global directory and reuses physical frames straight
-               out of the boot-time full-RAM identity map (see
-               paging_init()) for its own code - freeing "unused" PDE1
-               entries can't tell that apart from genuine kernel memory
-               without first teaching elf_load_mem() to track which pages
-               it actually owns per load. Left as a real, understood,
-               reproducible bug for whoever picks this up next rather than
-               risk shipping a fix that frees live kernel memory. */
+               report (round 20/26/27), found in round 28 via a hardware
+               watchpoint: this used to scan and copy all 1024 entries of
+               whatever page_dir[1] happened to have present, which -
+               because paging_init() identity-maps ALL physical RAM at
+               boot - is essentially every present entry, not "one
+               process's few pages". Every fork() cloned the lot, and the
+               sheer number of pmm_alloc() calls that took made a
+               collision with an unrelated vmalloc() allocation (confirmed
+               live: gui.c's desktop_cache) a near-certainty.
+
+               The tempting fix - unmap+pmm_free the part of PDE1 nothing
+               currently needs, right before a fresh image loads over it -
+               was tried and immediately crashed: those frames are ALSO
+               the kernel's own general-purpose identity-mapped pool
+               (pmm_alloc() can hand any of them to ANY subsystem for ANY
+               purpose, and the codebase-wide convention of treating its
+               return value as a directly-dereferenceable pointer depends
+               on that mapping always being there) - confirmed live with a
+               hardware breakpoint: the very next pmm_alloc() call handed
+               back a frame this had just unmapped, and a kmemset() into
+               it via its own identity address faulted instantly.
+
+               Fixed here instead by bounding what gets copied FROM the
+               global template in the first place: pde1_clone_start/end
+               default to the full range (unbounded, matching the old
+               behavior) until paging_set_pde1_clone_bound() narrows them
+               to kush's own real load extent right after its one-time
+               boot load (see kernel.c) - nothing here ever unmaps
+               anything, it just stops copying page_dir[1] entries that
+               were only ever boot-time identity-map filler kush never
+               touched. PDE255 gets the same treatment for free: the real
+               user stack is always the same fixed 4 pages
+               (ELF_USER_STACK_TOP - ELF_USER_STACK_SIZE) regardless of
+               which process it belongs to, and - unlike PDE1's range -
+               that whole address range sits above all physical RAM, so
+               there's no identity-mapping ambiguity to worry about
+               either way.
+
+               One more wrinkle bounding PDE1 exposed (also found live
+               with a hardware breakpoint, same session, and hit again in
+               elf_load_mem()'s own segment loading and every ring-3 stack
+               setup before landing on this fix): this function's OWN
+               bookkeeping frames (the new directory page, the new
+               PDE1/255 table page, each individually cloned page below)
+               are pmm_alloc()'d and immediately kmemset/kmemcpy'd via
+               straight identity access, while the CALLER's directory -
+               not necessarily the one being built here - is still the
+               one active. pmm_alloc() itself now refuses to ever hand
+               back a frame from inside PDE1's own range for exactly this
+               reason (see its comment) - fixed once, centrally, rather
+               than auditing every pmm_alloc()-then-kmemset() call site in
+               the codebase for the same footgun. */
             uint32_t tbl_phys = page_dir[i] & ~0xFFF;
             uint32_t *src_tbl = (uint32_t *)tbl_phys;
             uint32_t new_tbl_phys = pmm_alloc();
             if (!new_tbl_phys) { pmm_free(new_dir_phys); return 0; }
             uint32_t *new_tbl = (uint32_t *)new_tbl_phys;
             kmemset(new_tbl, 0, PAGE_SIZE);
-            for (int j = 0; j < PAGE_ENTRIES; j++) {
+            int j_start = 0, j_end = PAGE_ENTRIES;
+            if (i == 1) {
+                j_start = (pde1_clone_start - 0x00400000) / PAGE_SIZE;
+                j_end   = (pde1_clone_end   - 0x00400000 + PAGE_SIZE - 1) / PAGE_SIZE;
+                if (j_start < 0) j_start = 0;
+                if (j_end > PAGE_ENTRIES) j_end = PAGE_ENTRIES;
+            } else {
+                j_start = PAGE_ENTRIES - (ELF_USER_STACK_SIZE / PAGE_SIZE);
+            }
+            for (int j = j_start; j < j_end; j++) {
                 if (!src_tbl[j]) continue;
                 uint32_t phys = src_tbl[j] & ~0xFFF;
                 uint32_t flags = src_tbl[j] & 0xFFF;
