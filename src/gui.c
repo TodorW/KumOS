@@ -1297,28 +1297,13 @@ static void files_refresh(void) {
     files_renaming = 0;
 }
 
-/* Rename-via-copy: there's no fat12_rename() (a FAT12 directory-entry-only
-   rename would be a smaller/faster op, but this OS's fat12.c never grew
-   one) - read the file's current bytes out, write them under the new
-   name, then delete the old entry. Reuses the same three primitives Del/
-   the terminal's own file commands already lean on, so no new on-disk
-   format code. 8KB covers every file this OS actually creates (docs,
-   saved canvases, package blobs are all well under that); anything larger
-   silently truncates on rename, same ceiling files_previewbuf already
-   imposes on viewing a file in this app. */
-static uint8_t files_renamebuf_data[8192];
-
 static void files_do_rename(void) {
     if (files_selected < 0 || !files_renamebuf[0]) { files_renaming = 0; return; }
     if (kstrcmp(files_renamebuf, files_entries[files_selected].name) == 0) {
         files_renaming = 0;
         return;
     }
-    int n = fat12_read(files_entries[files_selected].name, files_renamebuf_data,
-                        sizeof(files_renamebuf_data));
-    if (n < 0) n = 0;
-    fat12_write(files_renamebuf, files_renamebuf_data, (uint32_t)n);
-    fat12_delete(files_entries[files_selected].name);
+    fat12_rename(files_entries[files_selected].name, files_renamebuf);
     files_renaming = 0;
     files_refresh();
 }

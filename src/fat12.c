@@ -334,6 +334,27 @@ int fat12_delete(const char *name) {
     return ata_write(g_drive, f.sector, 1, g_sector);
 }
 
+/* A real FAT12 rename: just the directory entry's own 11-byte name field
+   rewritten in place, same sector and cluster chain untouched - O(1)
+   regardless of file size. The Files app used to fake this as
+   read+write-under-new-name+delete-old (the only primitives that existed
+   at the time), which re-copied the entire file through a fresh cluster
+   chain and lost the original data location and timestamps for no
+   reason. */
+int fat12_rename(const char *old_name, const char *new_name) {
+    if (!g_mounted) return -1;
+    dirfind_t f = fat12_find(old_name);
+    if (!f.found) return -1;
+    if (f.de.attr & ATTR_READONLY) return -1;
+    if (fat12_find(new_name).found) return -1;
+
+    char new83[11]; name_to_83(new_name, new83);
+    if (ata_read(g_drive, f.sector, 1, g_sector) < 0) return -1;
+    dirent_t *dir = (dirent_t *)g_sector;
+    kmemcpy(dir[f.index].name, new83, 11);
+    return ata_write(g_drive, f.sector, 1, g_sector);
+}
+
 /* Toggles the real on-disk FAT12 read-only attribute bit (the same one
    DOS/Windows uses) - not a fabricated permission model, this is the one
    piece of genuine per-file access control this filesystem format has. */

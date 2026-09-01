@@ -26,6 +26,7 @@ int  fat12_read(const char *name, void *buf, uint32_t bufsz);
 int  fat12_write(const char *name, const void *buf, uint32_t size);
 
 int  fat12_delete(const char *name);
+int  fat12_rename(const char *old_name, const char *new_name);
 
 int  fat12_set_readonly(const char *name, int ro);
 int  fat12_is_readonly(const char *name);
