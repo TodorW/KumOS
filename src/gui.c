@@ -159,6 +159,20 @@ static int set_vbe_mode(uint16_t width, uint16_t height, uint16_t bpp) {
 
 static uint32_t gui_pal_rgb[256];
 
+/* Persisted across boots via SETTINGS.TXT - see gui_load_settings()/
+   gui_save_settings(). Index into gui_theme_stops[] below. */
+static int gui_theme = 0;
+#define GUI_THEME_COUNT 3
+static const char *gui_theme_names[GUI_THEME_COUNT] = { "Sky", "Sunset", "Forest" };
+static const struct { uint8_t r0,g0,b0, r1,g1,b1, r2,g2,b2; } gui_theme_stops[GUI_THEME_COUNT] = {
+    /* Sky (the original default): light blue -> mid blue -> deep indigo */
+    { 110,140,210,  55,75,140,  15,18,42 },
+    /* Sunset: warm peach -> coral -> deep plum */
+    { 235,170,120,  200,95,90,  50,20,45 },
+    /* Forest: pale mint -> mid green -> deep pine */
+    { 170,215,175,  70,140,95,  15,45,30 },
+};
+
 static void build_palette(void) {
     struct { uint8_t r,g,b; } pal[64] = {
         {0,0,0},
@@ -211,26 +225,31 @@ static void build_palette(void) {
                          ((uint32_t)(pal[i].g*255/63) << 8)  |
                           (uint32_t)(pal[i].b*255/63);
 
-    /* Desktop wallpaper: a real 3-stop gradient (light sky-blue at the
-       top, mid-blue through the middle, deep indigo at the bottom) over
-       192 bands instead of the old 8 - at 758px of desktop height, 8
-       bands meant ~95px-tall solid-color stripes, clearly visible as
-       chunky/pixelated banding rather than a smooth sky. 192 bands means
-       ~4px steps, well past what's perceptible as banding. */
+    /* Desktop wallpaper: a real 3-stop gradient over 192 bands instead of
+       the old 8 - at 758px of desktop height, 8 bands meant ~95px-tall
+       solid-color stripes, clearly visible as chunky/pixelated banding
+       rather than a smooth sky. 192 bands means ~4px steps, well past
+       what's perceptible as banding. Stop colors come from the current
+       theme (Settings app, gui_theme/gui_theme_stops[] above) instead of
+       being hardcoded, so switching themes just means calling this again. */
     {
+        int th = (gui_theme >= 0 && gui_theme < GUI_THEME_COUNT) ? gui_theme : 0;
+        int r0=gui_theme_stops[th].r0, g0=gui_theme_stops[th].g0, b0=gui_theme_stops[th].b0;
+        int r1=gui_theme_stops[th].r1, g1=gui_theme_stops[th].g1, b1=gui_theme_stops[th].b1;
+        int r2=gui_theme_stops[th].r2, g2=gui_theme_stops[th].g2, b2=gui_theme_stops[th].b2;
         int half = C_GRAD_SKY2_BANDS / 2;
         for (int i = 0; i < C_GRAD_SKY2_BANDS; i++) {
             int r, g, b;
             if (i < half) {
                 int t = i, n = half;
-                r = 110 + (55-110)*t/n;
-                g = 140 + (75-140)*t/n;
-                b = 210 + (140-210)*t/n;
+                r = r0 + (r1-r0)*t/n;
+                g = g0 + (g1-g0)*t/n;
+                b = b0 + (b1-b0)*t/n;
             } else {
                 int t = i - half, n = C_GRAD_SKY2_BANDS - half;
-                r = 55 + (15-55)*t/n;
-                g = 75 + (18-75)*t/n;
-                b = 140 + (42-140)*t/n;
+                r = r1 + (r2-r1)*t/n;
+                g = g1 + (g2-g1)*t/n;
+                b = b1 + (b2-b1)*t/n;
             }
             gui_pal_rgb[C_GRAD_SKY2+i] = ((uint32_t)r<<16)|((uint32_t)g<<8)|(uint32_t)b;
         }
@@ -251,9 +270,30 @@ static uint8_t *backbuf = 0;
    checks and per-pixel math. */
 static uint8_t *desktop_cache = 0;
 
+/* The only thing the Settings app persists so far is the wallpaper theme
+   - a single digit in an 8.3 FAT12 file is as simple as this can get.
+   Loaded once at gui_init() (before the first build_palette() call, so
+   the chosen theme is what actually renders from the very first frame),
+   saved whenever the Settings app changes it. */
+static void gui_load_settings(void) {
+    if (!fat12_mounted()) return;
+    char buf[8];
+    int n = fat12_read("SETTINGS.TXT", buf, sizeof(buf) - 1);
+    if (n <= 0) return;
+    int t = buf[0] - '0';
+    if (t >= 0 && t < GUI_THEME_COUNT) gui_theme = t;
+}
+
+static void gui_save_settings(void) {
+    if (!fat12_mounted()) return;
+    char buf[2] = { (char)('0' + gui_theme), '\n' };
+    fat12_write("SETTINGS.TXT", buf, 2);
+}
+
 void gui_init(void) {
     if (set_vbe_mode(GUI_WIDTH, GUI_HEIGHT, 32) != 0)
         serial_printf("[gui] no VBE framebuffer found (need qemu -vga std)\r\n");
+    gui_load_settings();
     build_palette();
     if (!backbuf) backbuf = (uint8_t*)vmalloc(GUI_WIDTH * GUI_HEIGHT);
     if (!desktop_cache) desktop_cache = (uint8_t*)vmalloc(GUI_WIDTH * GUI_HEIGHT);
@@ -560,6 +600,21 @@ static void icon_glyph(int x, int y, icon_kind_t kind) {
         gui_pixel(x+9, y, C_BLACK);
         gui_pixel(x+10, y+1, C_RED);
         break;
+    case ICON_SETTINGS:
+        /* a gear: a solid hub plus 4 stubby teeth around it - no circle
+           primitive to draw with, so the "hub" is just a filled square
+           and the teeth are short rect stubs on each side. */
+        gui_rect_fill(x+6, y+3, 8, 8, C_LIGHT_GREY);
+        gui_rect_fill(x+8, y+5, 4, 4, C_DARK_GREY);
+        gui_rect_fill(x+9, y,   2, 3, C_LIGHT_GREY);
+        gui_rect_fill(x+9, y+11,2, 3, C_LIGHT_GREY);
+        gui_rect_fill(x,   y+5, 3, 2, C_LIGHT_GREY);
+        gui_rect_fill(x+17,y+5, 3, 2, C_LIGHT_GREY);
+        gui_pixel(x+3, y+2, C_LIGHT_GREY);
+        gui_pixel(x+16,y+2, C_LIGHT_GREY);
+        gui_pixel(x+3, y+11,C_LIGHT_GREY);
+        gui_pixel(x+16,y+11,C_LIGHT_GREY);
+        break;
     }
 }
 
@@ -663,7 +718,7 @@ static void gui_beep(uint32_t freq_hz, uint32_t dur_ticks) {
 typedef enum {
     WIN_TERMINAL=0, WIN_TERMINAL2=1, WIN_TERMINAL3=2, WIN_FILES=3, WIN_SYSMON=4,
     WIN_CALC=5, WIN_EDITOR=6, WIN_PKG=7, WIN_BROWSER=8, WIN_WRITE=9, WIN_PAINT=10, WIN_SNAKE=11,
-    WIN_PIANO=12, WIN_2048=13, WIN_MINE=14, WIN_COUNT=15
+    WIN_PIANO=12, WIN_2048=13, WIN_MINE=14, WIN_SETTINGS=15, WIN_COUNT=16
 } wintype_t;
 
 typedef struct { int active, x, y, w, h, minimized, min_w, min_h, maxed, rx, ry, rw, rh; } winrec_t;
@@ -689,6 +744,7 @@ static const char *win_title(int t) {
         case WIN_PIANO:    return "Piano";
         case WIN_2048:     return "2048";
         case WIN_MINE:     return "Minesweeper";
+        case WIN_SETTINGS: return "Settings";
     }
     return "";
 }
@@ -895,12 +951,25 @@ void gui_draw_desktop(void) {
     gui_icon(8, ICON_START_Y + 10*ICON_SLOT, "Piano", C_PURPLE,    ICON_PIANO);
     gui_icon(8, ICON_START_Y + 11*ICON_SLOT, "2048",  C_ORANGE,    ICON_2048);
     gui_icon(8, ICON_START_Y + 12*ICON_SLOT, "Mines", C_LIGHT_GREY,ICON_MINE);
-    gui_icon(8, ICON_START_Y + 13*ICON_SLOT, "Exit",  C_DARK_GREY, ICON_EXIT);
+    gui_icon(8, ICON_START_Y + 13*ICON_SLOT, "Set",   C_DARK_GREY, ICON_SETTINGS);
+    gui_icon(8, ICON_START_Y + 14*ICON_SLOT, "Exit",  C_DARK_GREY, ICON_EXIT);
 
     gui_printf(52, 18, C_LIGHT_GREY, C_DESKTOP,
                "Click icons to open apps");
     gui_printf(52, 28, C_DARK_GREY,  C_DESKTOP,
                "Drag bar to move, Esc to close");
+}
+
+/* Switching themes (Settings app) changes what build_palette() puts in
+   the wallpaper's palette slots, but the desktop is only ever drawn once
+   into desktop_cache at gui_run() startup and memcpy'd from there every
+   frame since - see desktop_cache's own comment. Redo that whole
+   one-time sequence so a theme change actually shows up live instead of
+   only taking effect on the next boot. */
+static void gui_apply_theme(void) {
+    build_palette();
+    gui_draw_desktop();
+    kmemcpy(desktop_cache, backbuf, GUI_WIDTH * GUI_HEIGHT);
 }
 
 #define TERM_W    680
@@ -2349,6 +2418,49 @@ static void mine_handle_click(winrec_t *w, int mx, int my) {
     mine_reveal(r, c);
 }
 
+#define SETTINGS_SWATCH_W 70
+#define SETTINGS_SWATCH_H 40
+#define SETTINGS_SWATCH_GAP 12
+
+static void settings_swatch_rect(winrec_t *w, int i, int *sx, int *sy) {
+    *sx = w->x + 14 + i*(SETTINGS_SWATCH_W + SETTINGS_SWATCH_GAP);
+    *sy = w->y + 40;
+}
+
+static void render_settings(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "Settings");
+    gui_puts(w->x+10, w->y+16, "Desktop theme:", C_WHITE, C_WIN_BG);
+
+    for (int i = 0; i < GUI_THEME_COUNT; i++) {
+        int sx, sy; settings_swatch_rect(w, i, &sx, &sy);
+        /* No arbitrary-RGB fill available outside the fixed 256-color
+           palette this whole GUI draws through - approximate each
+           theme's swatch with the closest thing already on the palette
+           instead of adding a one-off true-color path just for this. */
+        uint8_t approx = (i==0) ? C_LIGHT_BLUE : (i==1) ? C_ORANGE : C_LIGHT_GREEN;
+        gui_rect_fill(sx, sy, SETTINGS_SWATCH_W, SETTINGS_SWATCH_H, approx);
+        gui_rect(sx, sy, SETTINGS_SWATCH_W, SETTINGS_SWATCH_H,
+                 (i == gui_theme) ? C_WHITE : C_DARK_GREY);
+        gui_puts(sx+4, sy+SETTINGS_SWATCH_H+2, gui_theme_names[i],
+                 (i == gui_theme) ? C_YELLOW : C_LIGHT_GREY, C_WIN_BG);
+    }
+
+    gui_puts(w->x+10, w->y+w->h-24, "Click a swatch to apply and save.",
+             C_DARK_GREY, C_WIN_BG);
+}
+
+static void settings_handle_click(winrec_t *w, int mx, int my) {
+    for (int i = 0; i < GUI_THEME_COUNT; i++) {
+        int sx, sy; settings_swatch_rect(w, i, &sx, &sy);
+        if (mx >= sx && mx < sx+SETTINGS_SWATCH_W && my >= sy && my < sy+SETTINGS_SWATCH_H) {
+            gui_theme = i;
+            gui_apply_theme();
+            gui_save_settings();
+            return;
+        }
+    }
+}
+
 static void mine_handle_rightclick(winrec_t *w, int mx, int my) {
     int cx0 = w->x+4, cy0 = w->y+14;
     int c = (mx-cx0)/MINE_CELL, r = (my-cy0)/MINE_CELL;
@@ -2550,6 +2662,7 @@ static int launcher_build(launch_item_t *items, int max) {
     if (n<max) items[n++] = (launch_item_t){"Piano",          ICON_PIANO,   WIN_PIANO,    0, 0};
     if (n<max) items[n++] = (launch_item_t){"2048",           ICON_2048,    WIN_2048,     0, 0};
     if (n<max) items[n++] = (launch_item_t){"Minesweeper",    ICON_MINE,    WIN_MINE,     0, 0};
+    if (n<max) items[n++] = (launch_item_t){"Settings",       ICON_SETTINGS,WIN_SETTINGS, 0, 0};
     int total = pkgwin_total();
     for (int i=0;i<total && n<max;i++) {
         if (!pkgwin_installed(i)) continue;
@@ -2578,6 +2691,7 @@ static void launcher_open_wintype(int t) {
         case WIN_PIANO:    wm_open(WIN_PIANO,   420, 300, 240, 150);       break;
         case WIN_2048:     wm_open(WIN_2048,    460, 150, 220, 260);       break;
         case WIN_MINE:     wm_open(WIN_MINE,    430, 140, 160, 190);       break;
+        case WIN_SETTINGS: wm_open(WIN_SETTINGS,420, 220, 260, 190);       break;
     }
 }
 
@@ -2695,6 +2809,7 @@ void gui_run(void) {
             else if (t==WIN_PIANO) render_piano(w);
             else if (t==WIN_2048) render_2048(w);
             else if (t==WIN_MINE) render_mine(w);
+            else if (t==WIN_SETTINGS) render_settings(w);
         }
 
         gui_draw_taskbar();
@@ -2902,6 +3017,8 @@ void gui_run(void) {
                     piano_handle_click(w, mx, my);
                 } else if (hit == WIN_MINE) {
                     mine_handle_click(w, mx, my);
+                } else if (hit == WIN_SETTINGS) {
+                    settings_handle_click(w, mx, my);
                 }
             } else if (my < 10 && mx < 33) {
                 launcher_open = 1;
@@ -2927,7 +3044,8 @@ void gui_run(void) {
                 else if (iconidx==10) wm_open(WIN_PIANO,  420, 300, 240, 150);
                 else if (iconidx==11) wm_open(WIN_2048,   460, 150, 220, 260);
                 else if (iconidx==12) wm_open(WIN_MINE,   430, 140, 160, 190);
-                else if (iconidx==13) running = 0;
+                else if (iconidx==13) wm_open(WIN_SETTINGS, 420, 220, 260, 190);
+                else if (iconidx==14) running = 0;
             }
         }
 
