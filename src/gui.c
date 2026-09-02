@@ -162,6 +162,17 @@ static uint32_t gui_pal_rgb[256];
 /* Persisted across boots via SETTINGS.TXT - see gui_load_settings()/
    gui_save_settings(). Index into gui_theme_stops[] below. */
 static int gui_theme = 0;
+
+/* Shared Yes/No confirmation modal - Files' delete and System Monitor's
+   kill used to fire straight off a single click with no way back. One
+   pending-action slot is enough (nothing else takes input while it's up:
+   gui_run()'s click dispatch checks this before anything else, same as
+   it already does for ctxmenu_open/launcher_open). */
+typedef enum { CONFIRM_NONE = 0, CONFIRM_DELETE_FILE, CONFIRM_KILL_TASK } confirm_kind_t;
+static confirm_kind_t confirm_pending = CONFIRM_NONE;
+static char           confirm_target_name[64];
+static int            confirm_target_pid;
+
 #define GUI_THEME_COUNT 3
 static const char *gui_theme_names[GUI_THEME_COUNT] = { "Sky", "Sunset", "Forest" };
 static const struct { uint8_t r0,g0,b0, r1,g1,b1, r2,g2,b2; } gui_theme_stops[GUI_THEME_COUNT] = {
@@ -1459,8 +1470,8 @@ static void files_handle_click(winrec_t *w, int mx, int my) {
             kstrcpy(files_renamebuf, files_entries[files_selected].name);
             files_renaming = 1;
         } else if (point_in(mx, my, w->x+w->w-78, w->y+w->h-14, 34, 11)) {
-            fat12_delete(files_entries[files_selected].name);
-            files_refresh();
+            kstrcpy(confirm_target_name, files_entries[files_selected].name);
+            confirm_pending = CONFIRM_DELETE_FILE;
         } else if (point_in(mx, my, w->x+w->w-40, w->y+w->h-14, 34, 11)) {
             files_preview = 0;
         }
@@ -1527,7 +1538,10 @@ static void sysmon_handle_click(winrec_t *w, int mx, int my) {
         task_t *t = sched_task_at(i);
         if (!t || t->state == TASK_DEAD || t->state == TASK_ZOMBIE) continue;
         if (point_in(mx, my, w->x+1, cy-1, w->w-2, 9)) {
-            if (t->pid != 0 && i != cur) signal_send(t->pid, SIGTERM);
+            if (t->pid != 0 && i != cur) {
+                confirm_target_pid = t->pid;
+                confirm_pending = CONFIRM_KILL_TASK;
+            }
             return;
         }
         cy += 9; shown++;
@@ -2759,6 +2773,54 @@ static void draw_ctxmenu(void) {
 }
 
 /* -2 = click outside the menu, -1 = inside but not on a row, >=0 = row index */
+#define CONFIRM_W 190
+#define CONFIRM_H 54
+
+static void confirm_rect(int *x, int *y) {
+    *x = (GUI_WIDTH  - CONFIRM_W) / 2;
+    *y = (GUI_HEIGHT - CONFIRM_H) / 2;
+}
+
+static void draw_confirm(void) {
+    if (confirm_pending == CONFIRM_NONE) return;
+    int x, y; confirm_rect(&x, &y);
+    fill_rounded(x+2, y+2, CONFIRM_W, CONFIRM_H, C_SHADOW);
+    fill_rounded(x, y, CONFIRM_W, CONFIRM_H, C_WIN_BG);
+    outline_rounded(x, y, CONFIRM_W, CONFIRM_H, C_WIN_BORDER);
+
+    char msg[64];
+    if (confirm_pending == CONFIRM_DELETE_FILE) {
+        kstrcpy(msg, "Delete "); kstrcat(msg, confirm_target_name); kstrcat(msg, "?");
+    } else {
+        kstrcpy(msg, "Kill this task?");
+    }
+    gui_puts(x+10, y+9, msg, C_WHITE, C_WIN_BG);
+
+    int by = y+CONFIRM_H-20;
+    gui_button(x+18, by, 60, 14, "Yes", gui_pressed(x+18, by, 60, 14));
+    gui_button(x+CONFIRM_W-78, by, 60, 14, "No", gui_pressed(x+CONFIRM_W-78, by, 60, 14));
+}
+
+/* Returns 1 if the click was consumed by the modal (whether or not it
+   landed on a button - nothing behind it should ever see this click). */
+static int confirm_handle_click(int mx, int my) {
+    if (confirm_pending == CONFIRM_NONE) return 0;
+    int x, y; confirm_rect(&x, &y);
+    int by = y+CONFIRM_H-20;
+    if (point_in(mx, my, x+18, by, 60, 14)) {
+        if (confirm_pending == CONFIRM_DELETE_FILE) {
+            fat12_delete(confirm_target_name);
+            files_refresh();
+        } else if (confirm_pending == CONFIRM_KILL_TASK) {
+            signal_send(confirm_target_pid, SIGTERM);
+        }
+        confirm_pending = CONFIRM_NONE;
+    } else if (point_in(mx, my, x+CONFIRM_W-78, by, 60, 14)) {
+        confirm_pending = CONFIRM_NONE;
+    }
+    return 1;
+}
+
 static int ctxmenu_hit(int mx, int my) {
     int x, y, h; ctxmenu_rect(&x, &y, &h);
     if (!point_in(mx, my, x, y, CTXMENU_W, h)) return -2;
@@ -2815,6 +2877,7 @@ void gui_run(void) {
         gui_draw_taskbar();
         if (launcher_open) draw_launcher();
         if (ctxmenu_open) draw_ctxmenu();
+        draw_confirm();
 
         mouse_state_t *m = mouse_get();
         int mx = m->x, my = m->y;
@@ -2942,7 +3005,8 @@ void gui_run(void) {
         }
 
         int right_now = m->right;
-        if (right_now && !prev_right && !ctxmenu_open && !launcher_open && my >= 10) {
+        if (right_now && !prev_right && !ctxmenu_open && !launcher_open &&
+            confirm_pending == CONFIRM_NONE && my >= 10) {
             int hitw = -1;
             for (int i=zcount-1;i>=0 && hitw<0;i--) {
                 int t = zorder[i]; winrec_t *w = &wins[t];
@@ -2954,7 +3018,9 @@ void gui_run(void) {
         prev_right = right_now;
 
         int left_now = m->left;
-        if (left_now && !prev_left && ctxmenu_open) {
+        if (left_now && !prev_left && confirm_pending != CONFIRM_NONE) {
+            confirm_handle_click(mx, my);
+        } else if (left_now && !prev_left && ctxmenu_open) {
             int row = ctxmenu_hit(mx, my);
             ctxmenu_open = 0;
             if (row == 0) wm_open_new_terminal();
