@@ -2568,8 +2568,12 @@ static void pkg_handle_click(winrec_t *w, int mx, int my) {
         if (pkg_selected < 0) { kstrcpy(pkg_status, "select one first"); return; }
         if (!pkgwin_installed(pkg_selected)) { kstrcpy(pkg_status, "install it first"); return; }
 
-        wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
-        term_cur = 0;
+        /* WIN_TERMINAL itself is the live real-kush view now (see
+           gui_set_boot_terminal_pid()) - its toy dispatcher/term_lines[]
+           aren't drawn there any more, so this runs in the second
+           terminal window instead. */
+        wm_open(WIN_TERMINAL2, 64, 44, TERM_W, TERM_H);
+        term_cur = 1;
 
         char cmdbuf[TERM_COLS+1];
         kstrcpy(cmdbuf, "exec "); kstrcat(cmdbuf, pkgwin_fname(pkg_selected));
@@ -2578,7 +2582,7 @@ static void pkg_handle_click(winrec_t *w, int mx, int my) {
         term_puts_c(echo, TERM_FG_ECHO);
         term_exec(cmdbuf);
 
-        kstrcpy(pkg_status, "ran in Terminal");
+        kstrcpy(pkg_status, "ran in Terminal 2");
         return;
     }
     for (int i=0;i<total && i<maxrows;i++) {
@@ -2710,8 +2714,10 @@ static void launcher_open_wintype(int t) {
 }
 
 static void launcher_run_pkg(int pkg_idx) {
-    wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
-    term_cur = 0;
+    /* Same reasoning as the Packages window's own Run button above -
+       WIN_TERMINAL is the live real-kush view, not a toy-dispatcher slot. */
+    wm_open(WIN_TERMINAL2, 64, 44, TERM_W, TERM_H);
+    term_cur = 1;
     char cmdbuf[TERM_COLS+1];
     kstrcpy(cmdbuf, "exec "); kstrcat(cmdbuf, pkgwin_fname(pkg_idx));
     char echo[TERM_COLS+3];
