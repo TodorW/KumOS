@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define GUI_WIDTH    1024
-#define GUI_HEIGHT   768
+#define GUI_WIDTH    1920
+#define GUI_HEIGHT   1080
 
 #define C_BLACK        0
 #define C_BLUE         1
