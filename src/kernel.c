@@ -1629,11 +1629,19 @@ void kernel_main(uint32_t magic, multiboot_info_t *mbi) {
            just that, without ever touching a single mapping here. */
         paging_set_pde1_clone_bound(boot_r.load_base, boot_r.load_end);
 
+        /* Used to sched_waitpid() here and only call gui_run() once kush
+           exited - a separate pre-GUI screen, then a completely different
+           (much smaller) command set once the GUI took over. Spawning it
+           and going straight to gui_run() instead means kush keeps
+           running, for real, concurrently as its own scheduled task - the
+           GUI's own event loop is task 0, kush is whatever elf_spawn()
+           returns here - and gui.c hosts its actual console live inside
+           the desktop's own terminal window (gui_set_boot_terminal_pid())
+           instead of relaunching a lookalike. */
         int boot_pid = elf_spawn("kush", &boot_r);
-        if (boot_pid >= 0) {
-            sched_waitpid(boot_pid);
-            __asm__ volatile("sti"); /* see the "wait" command's sched_waitpid() above */
-        }
+        gui_set_boot_terminal_pid(boot_pid);
+    } else {
+        gui_set_boot_terminal_pid(-1);
     }
     gui_run();
 
