@@ -166,6 +166,11 @@ static int disk_vfs_read(int d, void *buf, uint32_t len) {
 }
 static int disk_vfs_write(int d, const void *buf, uint32_t len) {
     if (d < 0 || d >= DISK_MAX_OPEN || !disk_open[d].used) return -1;
+    /* an O_APPEND open of a file whose size is already >= DISK_BUF_SIZE-1
+       (reachable: fat12_read fills disk_open[].buf up to a full
+       DISK_BUF_SIZE, so a file exactly that size leaves pos == DISK_BUF_SIZE)
+       used to underflow this into a ~4-billion-byte kmemcpy below. */
+    if (disk_open[d].pos >= DISK_BUF_SIZE - 1) return 0;
     if (disk_open[d].pos + len >= DISK_BUF_SIZE) len = DISK_BUF_SIZE - disk_open[d].pos - 1;
     kmemcpy(disk_open[d].buf + disk_open[d].pos, buf, len);
     disk_open[d].pos += len;
@@ -456,9 +461,38 @@ int vfs_getcwd(char *buf, uint32_t sz) {
     return (int)kstrlen(buf);
 }
 
+/* Builds the new cwd into a local buffer and validates it before ever
+   touching the real cwd[] - the old version kstrcat'd straight onto the
+   live global with no length check and no existence check, so repeated
+   relative `cd x` calls (nothing here ever resolves "..", so nothing
+   naturally shrinks it back down) grew cwd without bound and overran the
+   mounts[] array declared right after it in this file - live function
+   pointers, called on every open/stat/readdir. Also silently "succeeded"
+   for a path that matched no mount at all. */
 int vfs_chdir(const char *path) {
-    if (path[0]=='/') kstrncpy(cwd, path, VFS_MAX_PATH-1);
-    else { kstrcat(cwd, "/"); kstrcat(cwd, path); }
+    char resolved[VFS_MAX_PATH];
+
+    if (path[0] == '/') {
+        kstrncpy(resolved, path, VFS_MAX_PATH-1);
+        resolved[VFS_MAX_PATH-1] = 0;
+    } else if (kstrcmp(path, "..") == 0) {
+        kstrcpy(resolved, cwd);
+        char *slash = 0;
+        for (char *p = resolved; *p; p++) if (*p == '/') slash = p;
+        if (slash && slash != resolved) *slash = 0;
+        else if (slash) slash[1] = 0;
+    } else {
+        uint32_t clen = (uint32_t)kstrlen(cwd), plen = (uint32_t)kstrlen(path);
+        if (clen + 1 + plen >= VFS_MAX_PATH) return -1;
+        kstrcpy(resolved, cwd);
+        kstrcat(resolved, "/");
+        kstrcat(resolved, path);
+    }
+
+    const char *local = 0;
+    if (find_mount(resolved, &local) < 0) return -1;
+
+    kstrcpy(cwd, resolved);
     return 0;
 }
 

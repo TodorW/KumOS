@@ -37,6 +37,17 @@ typedef struct syscall_regs {
 
 static syscall_regs_t *g_cur_regs;
 
+/* Every syscall below that takes a raw user pointer must run it through
+   one of these before dereferencing it - see paging_user_range_ok()'s
+   comment for what this closes (arbitrary kernel-memory read/write from
+   ring 3). USTR_MAX bounds the walk for path-shaped strings; it matches
+   VFS_MAX_PATH so a path that would get rejected downstream anyway is
+   rejected here just as validly. */
+#define USTR_MAX 128
+static inline int ubuf_r(uint32_t addr, uint32_t len) { return paging_user_range_ok(addr, len, 0); }
+static inline int ubuf_w(uint32_t addr, uint32_t len) { return paging_user_range_ok(addr, len, 1); }
+static inline int ustr(uint32_t addr)                 { return paging_user_str_ok(addr, USTR_MAX); }
+
 static uint32_t sc_exit(uint32_t code, uint32_t b, uint32_t c) {
     (void)b; (void)c;
 
@@ -47,8 +58,8 @@ static uint32_t sc_exit(uint32_t code, uint32_t b, uint32_t c) {
 static uint32_t sc_write(uint32_t buf_addr, uint32_t len, uint32_t c) {
     (void)c;
 
-    if (buf_addr == 0 || buf_addr > 0x40100000) return (uint32_t)-1;
     if (len > 4096) len = 4096;
+    if (!ubuf_r(buf_addr, len)) return (uint32_t)-1;
     const char *buf = (const char *)buf_addr;
     int n = vfs_write(1, buf, len);
     return n < 0 ? 0 : (uint32_t)n;
@@ -56,8 +67,9 @@ static uint32_t sc_write(uint32_t buf_addr, uint32_t len, uint32_t c) {
 
 static uint32_t sc_read(uint32_t buf_addr, uint32_t len, uint32_t c) {
     (void)c;
-    if (buf_addr == 0 || len == 0) return 0;
+    if (len == 0) return 0;
     if (len > 256) len = 256;
+    if (!ubuf_w(buf_addr, len)) return 0;
     char *buf = (char *)buf_addr;
     return (uint32_t)keyboard_getline(buf, (int)len);
 }
@@ -126,7 +138,7 @@ static uint32_t sc_procstate(uint32_t pid, uint32_t b, uint32_t c) {
 
 static uint32_t sc_gettime(uint32_t buf_addr, uint32_t b, uint32_t c) {
     (void)b; (void)c;
-    if (!buf_addr) return (uint32_t)-1;
+    if (!ubuf_w(buf_addr, sizeof(rtc_time_t))) return (uint32_t)-1;
     rtc_time_t t = rtc_read();
     kmemcpy((void *)buf_addr, &t, sizeof(rtc_time_t));
     return 0;
@@ -134,14 +146,15 @@ static uint32_t sc_gettime(uint32_t buf_addr, uint32_t b, uint32_t c) {
 
 static uint32_t sc_serial_write(uint32_t buf, uint32_t len, uint32_t c) {
     (void)c;
-    if (!buf || len > 4096) return (uint32_t)-1;
+    if (len > 4096) return (uint32_t)-1;
+    if (!ubuf_r(buf, len)) return (uint32_t)-1;
     if (serial_ready()) serial_write(COM1, (const char *)buf, len);
     return len;
 }
 
 static uint32_t sc_vfs_open(uint32_t path, uint32_t flags, uint32_t c) {
     (void)c;
-    if (!path) return (uint32_t)-1;
+    if (!ustr(path)) return (uint32_t)-1;
     return (uint32_t)vfs_open((const char *)path, (int)flags);
 }
 static uint32_t sc_vfs_close(uint32_t fd, uint32_t b, uint32_t c) {
@@ -149,35 +162,37 @@ static uint32_t sc_vfs_close(uint32_t fd, uint32_t b, uint32_t c) {
     return (uint32_t)vfs_close((int)fd);
 }
 static uint32_t sc_vfs_read(uint32_t fd, uint32_t buf, uint32_t len) {
-    if (!buf) return (uint32_t)-1;
+    if (len == 0) return 0;
+    if (!ubuf_w(buf, len)) return (uint32_t)-1;
     return (uint32_t)vfs_read((int)fd, (void *)buf, len);
 }
 static uint32_t sc_vfs_write(uint32_t fd, uint32_t buf, uint32_t len) {
-    if (!buf) return (uint32_t)-1;
+    if (len == 0) return 0;
+    if (!ubuf_r(buf, len)) return (uint32_t)-1;
     return (uint32_t)vfs_write((int)fd, (const void *)buf, len);
 }
 static uint32_t sc_vfs_readdir(uint32_t path, uint32_t buf, uint32_t sz) {
-    if (!path||!buf) return 0;
+    if (!ustr(path) || sz == 0 || !ubuf_w(buf, sz)) return 0;
     return (uint32_t)vfs_readdir((const char *)path, (char *)buf, sz);
 }
 static uint32_t sc_vfs_stat(uint32_t path, uint32_t st, uint32_t c) {
     (void)c;
-    if (!path||!st) return (uint32_t)-1;
+    if (!ustr(path) || !ubuf_w(st, sizeof(vfs_stat_t))) return (uint32_t)-1;
     return (uint32_t)vfs_stat((const char *)path, (vfs_stat_t *)st);
 }
 static uint32_t sc_vfs_unlink(uint32_t path, uint32_t b, uint32_t c) {
     (void)b;(void)c;
-    if (!path) return (uint32_t)-1;
+    if (!ustr(path)) return (uint32_t)-1;
     return (uint32_t)vfs_unlink((const char *)path);
 }
 static uint32_t sc_vfs_chmod(uint32_t path, uint32_t mode, uint32_t c) {
     (void)c;
-    if (!path||!mode) return (uint32_t)-1;
+    if (!ustr(path) || !ustr(mode)) return (uint32_t)-1;
     return (uint32_t)vfs_chmod((const char *)path, (const char *)mode);
 }
 static uint32_t sc_vfs_pipe(uint32_t fds, uint32_t b, uint32_t c) {
     (void)b;(void)c;
-    if (!fds) return (uint32_t)-1;
+    if (!ubuf_w(fds, sizeof(int)*2)) return (uint32_t)-1;
     return (uint32_t)vfs_pipe((int *)fds);
 }
 static uint32_t sc_vfs_dup2(uint32_t old, uint32_t nw, uint32_t c) {
@@ -186,12 +201,12 @@ static uint32_t sc_vfs_dup2(uint32_t old, uint32_t nw, uint32_t c) {
 }
 static uint32_t sc_vfs_getcwd(uint32_t buf, uint32_t sz, uint32_t c) {
     (void)c;
-    if (!buf) return (uint32_t)-1;
+    if (sz == 0 || !ubuf_w(buf, sz)) return (uint32_t)-1;
     return (uint32_t)vfs_getcwd((char *)buf, sz);
 }
 static uint32_t sc_vfs_chdir(uint32_t path, uint32_t b, uint32_t c) {
     (void)b;(void)c;
-    if (!path) return (uint32_t)-1;
+    if (!ustr(path)) return (uint32_t)-1;
     return (uint32_t)vfs_chdir((const char *)path);
 }
 static uint32_t sc_isatty(uint32_t fd, uint32_t b, uint32_t c) {
@@ -216,7 +231,7 @@ static uint32_t sc_getppid(uint32_t a, uint32_t b, uint32_t c) {
 
 static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_addr) {
     (void)envp_addr;
-    if (!path_addr) return (uint32_t)-1;
+    if (!ustr(path_addr)) return (uint32_t)-1;
     const char *path = (const char *)path_addr;
 
     char upper[64]; int i=0;
@@ -243,7 +258,13 @@ static uint32_t sc_execve(uint32_t path_addr, uint32_t argv_addr, uint32_t envp_
     char *argv_snapshot[16]; int argc_snapshot = 0;
     if (argv_addr) {
         char **argv = (char **)argv_addr;
-        while (argv[argc_snapshot] && argc_snapshot < 15) {
+        /* validated one pointer-slot at a time rather than the whole 16-slot
+           range up front, so a legitimately short/small argv array isn't
+           rejected just because slot 16 would have run off the caller's
+           mapping */
+        while (argc_snapshot < 15 &&
+               ubuf_r(argv_addr + (uint32_t)argc_snapshot * sizeof(char*), sizeof(char*)) &&
+               argv[argc_snapshot]) {
             argv_snapshot[argc_snapshot] = argv[argc_snapshot];
             argc_snapshot++;
         }
@@ -397,9 +418,13 @@ static uint32_t sc_tcp_connect(uint32_t ip, uint32_t port, uint32_t x) {
     (void)x; return (uint32_t)tcp_connect(ip,(uint16_t)port);
 }
 static uint32_t sc_tcp_send(uint32_t s, uint32_t buf, uint32_t len) {
+    if (len == 0) return 0;
+    if (!ubuf_r(buf, len)) return (uint32_t)-1;
     return (uint32_t)tcp_send((int)s,(const void*)buf,(uint16_t)len);
 }
 static uint32_t sc_tcp_recv(uint32_t s, uint32_t buf, uint32_t len) {
+    if (len == 0) return 0;
+    if (!ubuf_w(buf, len)) return (uint32_t)-1;
     return (uint32_t)tcp_recv((int)s,(void*)buf,(uint16_t)len);
 }
 static uint32_t sc_tcp_close(uint32_t s, uint32_t b, uint32_t x) {
@@ -410,6 +435,8 @@ static uint32_t sc_select(uint32_t nfds, uint32_t rfds_addr, uint32_t wfds_addr)
     uint32_t timeout_ms = 5000;
     uint32_t deadline = timer_ticks() + timeout_ms / 10;
     int ready = 0;
+
+    if (rfds_addr && !ubuf_r(rfds_addr, sizeof(uint32_t))) return 0;
 
     while (timer_ticks() < deadline) {
         for (uint32_t fd = 0; fd < nfds && fd < 32; fd++) {

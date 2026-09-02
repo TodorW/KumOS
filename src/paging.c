@@ -214,6 +214,49 @@ int paging_is_mapped(uint32_t virt) {
     return pte && (*pte & PAGE_PRESENT);
 }
 
+/* Ring-3 syscall arguments are raw addresses the caller chose - nothing
+   upstream of these two checks ever confirmed they actually point into
+   THIS process's own mapped memory before the kernel (running at ring 0,
+   where the CPU's own U/S page-protection check never fires) read or wrote
+   through them directly. That let any user program hand a kernel address
+   to write()/read() as if it were its own buffer: write() leaked kernel
+   memory out over stdout, read() overwrote arbitrary kernel memory with
+   attacker-controlled bytes. Every PTE touched must be PRESENT and USER
+   (and WRITE, for a buffer the kernel is about to write into). */
+int paging_user_range_ok(uint32_t addr, uint32_t len, int need_write) {
+    if (!addr || !len) return 0;
+    if (addr + len < addr) return 0;               /* wraps past 4GB */
+    uint32_t start = addr & ~0xFFF;
+    uint32_t end   = (addr + len - 1) & ~0xFFF;
+    for (uint32_t page = start; ; page += PAGE_SIZE) {
+        uint32_t *pte = pte_ptr(page, 0);
+        if (!pte || !(*pte & PAGE_PRESENT) || !(*pte & PAGE_USER)) return 0;
+        if (need_write && !(*pte & PAGE_WRITE)) return 0;
+        if (page == end) break;
+    }
+    return 1;
+}
+
+/* Same idea for a NUL-terminated string argument (a path, mostly), whose
+   length isn't known up front - walks byte by byte, re-checking the PTE
+   only when crossing into a new page, and refuses to run off the end of
+   the caller's mapped memory looking for a terminator that isn't there. */
+int paging_user_str_ok(uint32_t addr, uint32_t maxlen) {
+    if (!addr) return 0;
+    uint32_t last_page = 0xFFFFFFFFu;
+    for (uint32_t i = 0; i < maxlen; i++) {
+        uint32_t va = addr + i;
+        uint32_t page = va & ~0xFFF;
+        if (page != last_page) {
+            uint32_t *pte = pte_ptr(page, 0);
+            if (!pte || !(*pte & PAGE_PRESENT) || !(*pte & PAGE_USER)) return 0;
+            last_page = page;
+        }
+        if (*(const char *)(uintptr_t)va == 0) return 1;
+    }
+    return 0;
+}
+
 void paging_dump_range(uint32_t start, uint32_t end) {
     uint32_t addr = start & ~0xFFF;
     int in_run = 0;

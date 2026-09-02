@@ -50,6 +50,8 @@ void     paging_unmap(uint32_t virt);
 void     paging_unmap_range(uint32_t start, uint32_t end);
 uint32_t paging_virt_to_phys(uint32_t virt);
 int      paging_is_mapped(uint32_t virt);
+int      paging_user_range_ok(uint32_t addr, uint32_t len, int need_write);
+int      paging_user_str_ok(uint32_t addr, uint32_t maxlen);
 void     paging_dump_range(uint32_t start, uint32_t end);
 
 void     demand_paging_init(void);
