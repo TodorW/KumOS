@@ -89,5 +89,7 @@ void gui_draw_desktop(void);
 void gui_draw_taskbar(void);
 
 void gui_run(void);
+void gui_set_boot_terminal_pid(int pid);
+int  gui_ring3_input_focused(void);
 
 #endif

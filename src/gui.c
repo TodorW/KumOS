@@ -173,6 +173,15 @@ static confirm_kind_t confirm_pending = CONFIRM_NONE;
 static char           confirm_target_name[64];
 static int            confirm_target_pid;
 
+/* WIN_TERMINAL, specifically, doesn't run the toy dispatcher below - see
+   gui_set_boot_terminal_pid()/render_boot_terminal(). Declared here (file
+   scope, ahead of everything) since wm_close() needs to refuse closing it
+   while kush is still alive - closing its only visible window without
+   killing the process it's live-viewing would leave that task's blocking
+   read() competing with the GUI's own keyboard_getchar() for the same
+   queue with no window to route the result to. */
+static int boot_term_pid = -1;
+
 #define GUI_THEME_COUNT 3
 static const char *gui_theme_names[GUI_THEME_COUNT] = { "Sky", "Sunset", "Forest" };
 static const struct { uint8_t r0,g0,b0, r1,g1,b1, r2,g2,b2; } gui_theme_stops[GUI_THEME_COUNT] = {
@@ -302,6 +311,14 @@ static void gui_save_settings(void) {
 }
 
 void gui_init(void) {
+    /* Flipped here, before set_vbe_mode() ever touches hardware, not in
+       gui_run() after gui_init() returns - a task preempted onto the CPU
+       (kush now runs concurrently with the GUI from the moment it's
+       spawned, see kernel_main()) in that gap would still see
+       gui_is_active()==0 and have vga_putchar() target real 0xB8000 while
+       VBE/LFB was already live underneath it - exactly the aliased-VRAM
+       corruption class rounds 20-29 closed everywhere else. */
+    gui_active = 1;
     if (set_vbe_mode(GUI_WIDTH, GUI_HEIGHT, 32) != 0)
         serial_printf("[gui] no VBE framebuffer found (need qemu -vga std)\r\n");
     gui_load_settings();
@@ -796,6 +813,7 @@ static void wm_cycle_focus(void) {
 }
 
 static void files_refresh(void);
+static int  boot_term_alive(void);
 static void pkg_refresh(void);
 
 static void wm_open(int t, int defx, int defy, int defw, int defh) {
@@ -812,6 +830,7 @@ static void wm_open(int t, int defx, int defy, int defw, int defh) {
 }
 
 static void wm_close(int t) {
+    if (t == WIN_TERMINAL && boot_term_alive()) return;
     wins[t].active = 0;
     wm_remove_z(t);
 }
@@ -985,6 +1004,13 @@ static void gui_apply_theme(void) {
 
 #define TERM_W    680
 #define TERM_H    460
+
+/* WIN_TERMINAL's own default size, sized to exactly fit the real 80x25
+   VGA console it hosts (see render_boot_terminal()) rather than the toy
+   dispatcher's TERM_W/TERM_H grid: 80*8 + a few px padding wide,
+   25*9 + titlebar + a few px padding tall. */
+#define BOOT_TERM_W  654
+#define BOOT_TERM_H  248
 #define TERM_ROWS  48
 #define TERM_COLS  84
 
@@ -1152,6 +1178,68 @@ static int term_calc(const char *e) {
     switch(op){case '+':return a+b;case '-':return a-b;
                case '*':return a*b;case '/':return b?a/b:0;
                case '%':return b?a%b:0;} return 0;
+}
+
+/* WIN_TERMINAL, specifically, doesn't run the toy dispatcher below -
+   kernel_main() spawns the real kush.elf that used to own the whole
+   screen before the GUI took over, hands its pid here, and this window
+   just becomes a live view onto vga.c's real console (see vga.c's
+   vmem()/shadow_mem - kush's own printf/ANSI output lands there exactly
+   like it always has, just redirected off real 0xB8000 while the GUI
+   owns the display). Real coreutils, real pipes, real job control, the
+   actual boot shell - not a second, smaller command set. */
+void gui_set_boot_terminal_pid(int pid) { boot_term_pid = pid; }
+
+static int boot_term_alive(void) {
+    if (boot_term_pid < 0) return 0;
+    task_t *t = sched_get_task(boot_term_pid);
+    return t && t->state != TASK_DEAD && t->state != TASK_ZOMBIE;
+}
+
+/* keyboard_getchar_blocking()/keyboard_getline() (kush's real read(), and
+   anything it in turn spawns) call this before ever touching the shared
+   keyboard queue. Without it, kush is ALWAYS trying to consume the next
+   keystroke while it's idle at a prompt, focused window or not - it has
+   no concept of GUI focus at all, so it raced the GUI's own
+   keyboard_getchar() poll for every key typed into any OTHER window
+   (confirmed live: characters meant for a Calculator window that had
+   just been given focus kept landing in the terminal instead). Gating
+   kush's side on real focus, and skipping the GUI's own poll while the
+   terminal has focus (see gui_run()'s host_focused), makes exactly one
+   side own the queue at a time. Returns 1 (unrestricted) before the GUI
+   has even started, so the old pre-GUI boot flow and the post-GUI-exit
+   bare CLI fallback both behave exactly as before. */
+int gui_ring3_input_focused(void) {
+    if (!gui_active) return 1;
+    return wm_topmost() == WIN_TERMINAL;
+}
+
+static void render_boot_terminal(winrec_t *w) {
+    gui_window(w->x, w->y, w->w, w->h, "Terminal");
+    gui_rect_fill(w->x+1, w->y+12, w->w-2, w->h-13, C_BLACK);
+
+    if (boot_term_pid < 0) {
+        gui_puts(w->x+8, w->y+18, "KUSH.ELF not found on disk.", C_LIGHT_RED, C_BLACK);
+        return;
+    }
+
+    const uint16_t *vb = vga_shadow_buffer();
+    int tx = w->x+4, ty = w->y+13;
+    for (int row = 0; row < VGA_HEIGHT; row++) {
+        for (int col = 0; col < VGA_WIDTH; col++) {
+            uint16_t entry = vb[row*VGA_WIDTH + col];
+            uint8_t ch  = (uint8_t)(entry & 0xFF);
+            uint8_t fg  = (uint8_t)(entry >> 8) & 0x0F;
+            uint8_t bg  = (uint8_t)(entry >> 12) & 0x0F;
+            if (ch != ' ' || bg != C_BLACK)
+                gui_putchar(tx+col*8, ty+row*9, (char)ch, fg, bg);
+        }
+    }
+
+    if (boot_term_alive() && vga_cursor_visible() && ((timer_ticks()/50)&1)) {
+        int cr = vga_get_row(), cc = vga_get_col();
+        gui_rect_fill(tx+cc*8, ty+cr*9, 7, 8, C_LIGHT_GREY);
+    }
 }
 
 static void render_terminal(winrec_t *w) {
@@ -2836,13 +2924,12 @@ static int ctxmenu_hit(int mx, int my) {
 
 void gui_run(void) {
     gui_init();
-    gui_active = 1;
     for (int i=0;i<MAX_TERMS;i++) term_init(i);
     editor_init_buf();
 
     for (int i=0;i<WIN_COUNT;i++) wins[i].active = 0;
     zcount = 0;
-    wm_open(WIN_TERMINAL, 40, 20, TERM_W, TERM_H);
+    wm_open(WIN_TERMINAL, 40, 20, BOOT_TERM_W, BOOT_TERM_H);
 
     int prev_left = 0, prev_right = 0;
     int dragging = -1, drag_ox = 0, drag_oy = 0;
@@ -2864,7 +2951,8 @@ void gui_run(void) {
             int t = zorder[i];
             winrec_t *w = &wins[t];
             if (!w->active || w->minimized) continue;
-            if (t>=WIN_TERMINAL && t<=WIN_TERMINAL3) { term_cur = t - WIN_TERMINAL; render_terminal(w); }
+            if (t==WIN_TERMINAL) { render_boot_terminal(w); }
+            else if (t>WIN_TERMINAL && t<=WIN_TERMINAL3) { term_cur = t - WIN_TERMINAL; render_terminal(w); }
             else if (t==WIN_FILES) render_files(w);
             else if (t==WIN_SYSMON) render_sysmon(w);
             else if (t==WIN_CALC) render_calc(w);
@@ -2899,10 +2987,29 @@ void gui_run(void) {
         gui_draw_cursor(mx, my);
         gui_flip();
 
-        char key = keyboard_getchar();
+        /* WIN_TERMINAL hosting a live real kush (see render_boot_terminal())
+           must not have this loop steal characters out of the shared
+           keyboard queue on its behalf - kush's own blocking read() is the
+           one consuming them, running concurrently as its own task. Only
+           a real global override (Alt+Tab) is worth reaching in non-
+           destructively; everything else, including a plain Tab kush
+           itself uses for completion, has to reach kush untouched. */
+        int host_focused = (wm_topmost() == WIN_TERMINAL && boot_term_alive());
+        char key = 0;
+        if (host_focused) {
+            if (keyboard_check_alttab()) wm_cycle_focus();
+        } else {
+            key = keyboard_getchar();
+        }
         if (key) {
             int top = wm_topmost();
-            if (key == 27) {
+            if (top == WIN_TERMINAL && !boot_term_alive()) {
+                /* kush exited (or never started) and this is its window -
+                   any keystroke here relaunches it rather than leaving a
+                   dead, frozen terminal as the GUI's one and only shell. */
+                elf_load_result_t r = elf_load_disk("KUSH.ELF");
+                if (r.error == 0) boot_term_pid = elf_spawn("kush", &r);
+            } else if (key == 27) {
                 if (ctxmenu_open) ctxmenu_open = 0;
                 else if (launcher_open) launcher_open = 0;
                 else if (top >= 0) wm_close(top);
@@ -2925,7 +3032,7 @@ void gui_run(void) {
             } else if (key == 15 && top == WIN_WRITE) {
                 /* Ctrl+O -> 15 (0x0F, SI). */
                 write_open();
-            } else if (top >= WIN_TERMINAL && top <= WIN_TERMINAL3) {
+            } else if (top > WIN_TERMINAL && top <= WIN_TERMINAL3) {
                 term_cur = top - WIN_TERMINAL;
                 if (key == '\n') {
                     char echo[TERM_COLS+3];
