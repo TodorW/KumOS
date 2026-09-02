@@ -35,4 +35,13 @@ int keyboard_check_ctrlc(void);
    killing it. */
 int keyboard_check_ctrlz(void);
 
+/* Same peek-and-requeue-if-not-mine approach, for Alt+Tab specifically -
+   the GUI's window-switch hotkey needs to reach past a focused window
+   that's otherwise consuming every keystroke itself (a live real kush
+   session hosted in a terminal window, see gui.c's boot_term_pid), same
+   as Ctrl+C/Ctrl+Z already reach past a foreground ring-3 program. Only
+   matches while Alt is actually held, so a plain Tab (kush's own
+   completion key) is never touched. */
+int keyboard_check_alttab(void);
+
 #endif

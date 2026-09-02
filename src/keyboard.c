@@ -3,6 +3,7 @@
 #include "idt.h"
 #include "vga.h"
 #include "kstring.h"
+#include "gui.h"
 #include <stdint.h>
 
 #define KB_DATA     0x60
@@ -199,6 +200,14 @@ char keyboard_getchar(void) {
 char keyboard_getchar_blocking(void) {
     for (;;) {
 
+        /* Never touch the shared queue while some other GUI window owns
+           the keyboard - see gui_ring3_input_focused()'s comment. Without
+           this a caller blocked here (kush's real read(), idle at its
+           prompt) keeps winning the race against the GUI's own
+           keyboard_getchar() poll for keystrokes meant for whichever
+           window is actually focused. */
+        if (!gui_ring3_input_focused()) { __asm__ volatile("sti; hlt"); continue; }
+
         if (bhead != btail) {
             char c = buf[btail]; btail=(btail+1)%KB_BUF; return c;
         }
@@ -394,6 +403,21 @@ int keyboard_check_ctrlz(void) {
 
     for (int idx = btail; idx != bhead; idx = (idx+1)%KB_BUF) {
         if (buf[idx] == 26) {
+            btail = (idx+1) % KB_BUF;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int keyboard_check_alttab(void) {
+    if (!alt) return 0;
+    char c = poll_once();
+    if (c == '\t') return 1;
+    if (c) { btail = (btail - 1 + KB_BUF) % KB_BUF; buf[btail] = c; }
+
+    for (int idx = btail; idx != bhead; idx = (idx+1)%KB_BUF) {
+        if (buf[idx] == '\t') {
             btail = (idx+1) % KB_BUF;
             return 1;
         }
