@@ -60,5 +60,7 @@ void vga_put_hex(uint32_t val);
 void vga_put_dec(uint32_t val);
 void vga_font_snapshot(void);
 void vga_font_restore(void);
+const uint16_t *vga_shadow_buffer(void);
+int  vga_cursor_visible(void);
 
 #endif

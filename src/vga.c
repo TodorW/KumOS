@@ -1,8 +1,28 @@
 #include "vga.h"
+#include "gui.h"
 #include <stdint.h>
 #include <stddef.h>
 
 static volatile uint16_t *const VGA_MEM = (uint16_t *)0xB8000;
+
+/* Real 0xB8000 text-mode memory and the VBE linear framebuffer gui.c
+   switches into are the same physical VRAM (see vga_font_snapshot()'s
+   comment above) - writing through VGA_MEM while the GUI has that VRAM
+   mapped as 32bpp pixels scribbles garbage across the visible desktop,
+   which is exactly the corruption class rounds 20-29 chased down for
+   ring-3 stdout. A ring-3 process's real, ANSI/VT100-driven console (this
+   whole file) needs somewhere safe to keep living once it's hosted inside
+   a GUI terminal window instead of the pre-GUI full-screen console, so
+   every VGA_MEM access goes through vmem() instead: real hardware memory
+   normally, this shadow array whenever the GUI owns the display. gui.c's
+   terminal renderer reads the same array to blit it into a window. */
+static uint16_t shadow_mem[VGA_WIDTH * VGA_HEIGHT];
+
+static inline volatile uint16_t *vmem(void) {
+    return gui_is_active() ? (volatile uint16_t *)shadow_mem : VGA_MEM;
+}
+
+const uint16_t *vga_shadow_buffer(void) { return shadow_mem; }
 
 static int terminal_row;
 static int terminal_col;
@@ -154,33 +174,38 @@ void vga_set_cursor(int x, int y) {
     outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
 }
 
+static int cursor_visible = 1;
+
 static void vga_cursor_show(int show) {
+    cursor_visible = show;
     outb(0x3D4, 0x0A);
     outb(0x3D5, show ? 0x0E : 0x20); /* bit5 = cursor disable */
 }
+
+int vga_cursor_visible(void) { return cursor_visible; }
 
 /* Inclusive cell range fill, used by CSI J/K erase modes. */
 static void vga_erase_range(int r1, int c1, int r2, int c2) {
     int start = r1 * VGA_WIDTH + c1;
     int end   = r2 * VGA_WIDTH + c2;
     for (int i = start; i <= end; i++)
-        VGA_MEM[i] = vga_entry(' ', terminal_color);
+        vmem()[i] = vga_entry(' ', terminal_color);
 }
 
 static void vga_scroll_up_lines(void) {
     for (int y = 0; y < VGA_HEIGHT - 1; y++)
         for (int x = 0; x < VGA_WIDTH; x++)
-            VGA_MEM[y * VGA_WIDTH + x] = VGA_MEM[(y+1) * VGA_WIDTH + x];
+            vmem()[y * VGA_WIDTH + x] = vmem()[(y+1) * VGA_WIDTH + x];
     for (int x = 0; x < VGA_WIDTH; x++)
-        VGA_MEM[(VGA_HEIGHT-1) * VGA_WIDTH + x] = vga_entry(' ', terminal_color);
+        vmem()[(VGA_HEIGHT-1) * VGA_WIDTH + x] = vga_entry(' ', terminal_color);
 }
 
 static void vga_scroll_down_lines(void) {
     for (int y = VGA_HEIGHT - 1; y > 0; y--)
         for (int x = 0; x < VGA_WIDTH; x++)
-            VGA_MEM[y * VGA_WIDTH + x] = VGA_MEM[(y-1) * VGA_WIDTH + x];
+            vmem()[y * VGA_WIDTH + x] = vmem()[(y-1) * VGA_WIDTH + x];
     for (int x = 0; x < VGA_WIDTH; x++)
-        VGA_MEM[x] = vga_entry(' ', terminal_color);
+        vmem()[x] = vga_entry(' ', terminal_color);
 }
 
 /* Alt screen buffer (CSI ?1049h/l, ?47h/l - what vi/ed-style full-screen
@@ -195,7 +220,7 @@ static int      alt_saved_row = 0, alt_saved_col = 0;
 
 static void vga_enter_alt_screen(void) {
     if (alt_screen_active) return;
-    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) alt_screen_buf[i] = VGA_MEM[i];
+    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) alt_screen_buf[i] = vmem()[i];
     alt_saved_row = terminal_row;
     alt_saved_col = terminal_col;
     alt_screen_active = 1;
@@ -204,7 +229,7 @@ static void vga_enter_alt_screen(void) {
 
 static void vga_exit_alt_screen(void) {
     if (!alt_screen_active) return;
-    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) VGA_MEM[i] = alt_screen_buf[i];
+    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) vmem()[i] = alt_screen_buf[i];
     alt_screen_active = 0;
     vga_goto(alt_saved_row, alt_saved_col);
 }
@@ -219,7 +244,7 @@ void vga_init(void) {
 void vga_clear(void) {
     for (int y = 0; y < VGA_HEIGHT; y++)
         for (int x = 0; x < VGA_WIDTH; x++)
-            VGA_MEM[y * VGA_WIDTH + x] = vga_entry(' ', terminal_color);
+            vmem()[y * VGA_WIDTH + x] = vga_entry(' ', terminal_color);
     terminal_row = 0;
     terminal_col = 0;
     vga_set_cursor(0, 0);
@@ -319,14 +344,14 @@ void vga_putchar(char c) {
     } else if (c == '\b') {
         if (terminal_col > 0) {
             terminal_col--;
-            VGA_MEM[terminal_row * VGA_WIDTH + terminal_col] = vga_entry(' ', terminal_color);
+            vmem()[terminal_row * VGA_WIDTH + terminal_col] = vga_entry(' ', terminal_color);
         }
     } else if (c == '\t') {
         int spaces = 4 - (terminal_col % 4);
         for (int i = 0; i < spaces; i++) vga_putchar(' ');
         return;
     } else {
-        VGA_MEM[terminal_row * VGA_WIDTH + terminal_col] = vga_entry(c, terminal_color);
+        vmem()[terminal_row * VGA_WIDTH + terminal_col] = vga_entry(c, terminal_color);
         if (++terminal_col >= VGA_WIDTH) {
             terminal_col = 0;
             if (++terminal_row >= VGA_HEIGHT)
@@ -344,7 +369,7 @@ void vga_puts_at(const char *str, int x, int y, vga_color fg, vga_color bg) {
     uint8_t color = vga_color_make(fg, bg);
     int cx = x;
     while (*str && cx < VGA_WIDTH) {
-        VGA_MEM[y * VGA_WIDTH + cx] = vga_entry(*str++, color);
+        vmem()[y * VGA_WIDTH + cx] = vga_entry(*str++, color);
         cx++;
     }
 }
@@ -352,19 +377,19 @@ void vga_puts_at(const char *str, int x, int y, vga_color fg, vga_color bg) {
 void vga_draw_box(int x, int y, int w, int h, vga_color fg, vga_color bg) {
     uint8_t color = vga_color_make(fg, bg);
 
-    VGA_MEM[y * VGA_WIDTH + x] = vga_entry((char)VGA_CH_TL, color);
-    VGA_MEM[y * VGA_WIDTH + x + w - 1] = vga_entry((char)VGA_CH_TR, color);
-    VGA_MEM[(y+h-1) * VGA_WIDTH + x] = vga_entry((char)VGA_CH_BL, color);
-    VGA_MEM[(y+h-1) * VGA_WIDTH + x + w - 1] = vga_entry((char)VGA_CH_BR, color);
+    vmem()[y * VGA_WIDTH + x] = vga_entry((char)VGA_CH_TL, color);
+    vmem()[y * VGA_WIDTH + x + w - 1] = vga_entry((char)VGA_CH_TR, color);
+    vmem()[(y+h-1) * VGA_WIDTH + x] = vga_entry((char)VGA_CH_BL, color);
+    vmem()[(y+h-1) * VGA_WIDTH + x + w - 1] = vga_entry((char)VGA_CH_BR, color);
 
     for (int i = 1; i < w-1; i++) {
-        VGA_MEM[y * VGA_WIDTH + x + i] = vga_entry((char)VGA_CH_HLINE, color);
-        VGA_MEM[(y+h-1) * VGA_WIDTH + x + i] = vga_entry((char)VGA_CH_HLINE, color);
+        vmem()[y * VGA_WIDTH + x + i] = vga_entry((char)VGA_CH_HLINE, color);
+        vmem()[(y+h-1) * VGA_WIDTH + x + i] = vga_entry((char)VGA_CH_HLINE, color);
     }
 
     for (int i = 1; i < h-1; i++) {
-        VGA_MEM[(y+i) * VGA_WIDTH + x] = vga_entry((char)VGA_CH_VLINE, color);
-        VGA_MEM[(y+i) * VGA_WIDTH + x + w - 1] = vga_entry((char)VGA_CH_VLINE, color);
+        vmem()[(y+i) * VGA_WIDTH + x] = vga_entry((char)VGA_CH_VLINE, color);
+        vmem()[(y+i) * VGA_WIDTH + x + w - 1] = vga_entry((char)VGA_CH_VLINE, color);
     }
 }
 
@@ -372,7 +397,7 @@ void vga_fill_rect(int x, int y, int w, int h, char ch, vga_color fg, vga_color 
     uint8_t color = vga_color_make(fg, bg);
     for (int row = y; row < y+h && row < VGA_HEIGHT; row++)
         for (int col = x; col < x+w && col < VGA_WIDTH; col++)
-            VGA_MEM[row * VGA_WIDTH + col] = vga_entry(ch, color);
+            vmem()[row * VGA_WIDTH + col] = vga_entry(ch, color);
 }
 
 int vga_get_col(void) { return terminal_col; }
